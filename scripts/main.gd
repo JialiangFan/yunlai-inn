@@ -228,7 +228,10 @@ func _ready() -> void:
 	_refresh_market()
 	_schedule_event()
 	_refresh_ui()
-	_show_popup("云来客栈", INTRO_TEXT, "开张营业", _start_game)
+	if not autotest and FileAccess.file_exists(_save_path()):
+		_show_popup("云来客栈", INTRO_TEXT, "重新开张", _start_game, "读取存档", _load_game)
+	else:
+		_show_popup("云来客栈", INTRO_TEXT, "开张营业", _start_game)
 
 
 func _init_dishes() -> void:
@@ -1067,6 +1070,77 @@ func _enter_rest_day() -> void:
 	_rebuild_staff_list()
 	_refresh_ui()
 	queue_redraw()
+	_save_game()
+
+
+# ---------------- 存档 ----------------
+# 只在休假日存：这时大堂没有客人和订单，存经营数据就够了。读档后回到那个休假日的集市。
+
+const SAVE_VARS := ["money", "food", "reputation", "day", "decor_level", "table_level", "stove_level",
+	"auto_food_on", "auto_food_target", "contest_idx", "contest_active", "contest_days", "contest_value",
+	"contest_sat_sum", "contest_sat_n", "scholar_loan", "game_finished"]
+
+
+func _save_path() -> String:
+	return "user://autotest_save.json" if autotest else "user://save.json"
+
+
+func _save_game() -> void:
+	var s := {"tables": tables.size(), "ornaments": ornaments, "market": market, "staff": [], "dishes": [], "research": null}
+	for k in SAVE_VARS:
+		s[k] = get(k)
+	for w in staff:
+		s.staff.append(w.info)
+	for d in dishes:
+		s.dishes.append([d.unlocked, d.ratio])
+	if research != null:
+		s.research = {"dish": dishes.find(research.dish), "points": research.points}
+	var f := FileAccess.open(_save_path(), FileAccess.WRITE)
+	f.store_string(JSON.stringify(s, "", false))  # 不排序键，能力值读回来顺序不乱
+
+
+func _load_game() -> void:
+	var s = JSON.parse_string(FileAccess.get_file_as_string(_save_path()))
+	if typeof(s) != TYPE_DICTIONARY:
+		_show_popup("云来客栈", "存档坏了，读不出来，只能重新开张。", "开张营业", _start_game)
+		return
+	for k in SAVE_VARS:
+		set(k, type_convert(s[k], typeof(get(k))))
+	tables.clear()
+	for i in int(s.tables):
+		_add_table()
+	ornaments.clear()
+	for id in s.ornaments:
+		ornaments[id] = int(s.ornaments[id])
+	for i in dishes.size():
+		dishes[i].unlocked = s.dishes[i][0]
+		dishes[i].ratio = float(s.dishes[i][1])
+	research = null
+	if s.research != null:
+		research = {"dish": dishes[int(s.research.dish)], "points": float(s.research.points)}
+	# JSON 里的数都成了小数，能力值、工钱改回整数
+	for info in s.staff + s.market:
+		for st in info.stats:
+			info.stats[st] = int(info.stats[st])
+		info.wage = int(info.wage)
+		if info.has("fee"):
+			info.fee = int(info.fee)
+	market = s.market
+	for w in staff:
+		w.queue_free()
+	staff.clear()
+	selected_staff = null
+	for info in s.staff:
+		_add_staff(info, true)
+	game_started = true
+	is_rest_day = true
+	day_over = false
+	chars_layer.visible = false
+	_log("读取存档：%s。" % _date_text())
+	_rebuild_staff_list()
+	_refresh_ui()
+	queue_redraw()
+	tabs.current_tab = 2
 
 
 func _after_rest_popup() -> void:
@@ -1078,6 +1152,7 @@ func _after_rest_popup() -> void:
 func _end_rest_day() -> void:
 	if not is_rest_day:
 		return
+	_save_game()  # 存下休假日里买的东西
 	chars_layer.visible = true
 	hover_shop = ""
 	_start_next_day()
@@ -2976,6 +3051,12 @@ func _autotest_rest_day() -> void:
 			sfx.volume, sfx.sfx_on, sfx.voice_on, sfx.ambient_on, sfx.music_on, sfx.has_music()])
 		await _shot("settings")
 		_toggle_settings()
+		_save_game()
+		var before := "%d|%d|%s|%s|%s" % [money, staff.size(), research.points, str(ornaments), staff[0].info.stats]
+		_load_game()
+		var after := "%d|%d|%s|%s|%s" % [money, staff.size(), research.points, str(ornaments), staff[0].info.stats]
+		print("[autotest] save/load roundtrip: ", "same" if before == after else "DIFF %s vs %s" % [before, after])
+		assert(before == after)
 		for t in [3, 2, 1, 0, 4]:
 			tabs.current_tab = t
 			await _shot("rest_tab%d" % t)
