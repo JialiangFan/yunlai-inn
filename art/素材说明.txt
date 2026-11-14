@@ -1,0 +1,36 @@
+云来客栈 · 图片素材说明
+========================
+
+把图片按下面的文件名放进 art 文件夹，游戏就会自动用图片；
+没放的就继续用代码画的版本。可以只换一部分，比如先只换桌子。
+
+支持 .png / .webp / .jpg，推荐带透明背景的 PNG。
+放好后直接双击「开始游戏.bat」就能看到效果（不用打开编辑器）。
+
+【客人】art/guests/            俯视或斜俯视的全身像，脚在图片底部
+  farmer.png      农夫
+  scholar.png     书生
+  swordsman.png   侠客
+  merchant.png    商贾
+
+【伙计】art/staff/
+  manager.png     掌柜
+  chef.png        厨师
+  waiter.png      跑堂
+  helper.png      杂役
+
+  人物图会按高度缩放到约 46 像素，宽度等比例。
+  像素画推荐原图 16x24、32x48 这类比例。
+
+【家具】art/furniture/
+  table.png       桌子，画成 68x68 像素（正方形）
+  stool.png       凳子，画成 26x26 像素
+  floor.png       大堂地板，会平铺铺满大堂，做成能无缝拼接的一块
+
+【菜】art/dishes/              文件名用菜名，例如：
+  阳春面.png  小笼包.png  麻婆豆腐.png  北京烤鸭.png …
+  （菜名见 scripts/data.gd，画成 24x24 像素显示在桌上）
+
+注意授权：
+  只用 CC0、或明确允许商用的素材；需要署名的，记到 art/CREDITS.txt。
+  不要从别的游戏里扒图。

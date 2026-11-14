@@ -1,0 +1,12 @@
+# Godot 编辑器自动生成的缓存，各台电脑自己会重建
+.godot/
+*.tmp
+
+# 导出的游戏包
+export/
+build/
+
+# 系统杂文件
+.DS_Store
+Thumbs.db
+desktop.ini

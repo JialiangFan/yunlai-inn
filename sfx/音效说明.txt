@@ -1,0 +1,29 @@
+云来客栈 · 音效说明
+==================
+
+游戏里的音效默认用代码合成，吆喝声在 voice 文件夹里（用 Windows 自带的中文语音生成）。
+想换成更真实的录音，把同名的 .wav 文件放进这个 sfx 文件夹就会优先使用：
+
+  chop.wav     厨师切菜（每做一道菜开头剁几刀）
+  sizzle.wav   炒菜的滋滋声（有厨师在炒菜时循环播放，最好是能首尾相接的一段）
+  bell.wav     客人进门的风铃
+  ding.wav     上菜时碗碟轻碰
+  coin.wav     收钱
+  angry.wav    客人生气离开
+  gong.wav     开张、打烊的锣
+  click.wav    点按钮
+
+  voice/welcome.wav  客官里边请
+  voice/order.wav    好嘞，马上就来
+  voice/serve.wav    菜来咯，客官慢用
+  voice/bye.wav      客官慢走，欢迎再来
+  voice/open.wav     开张咯
+
+  bgm.mp3      背景音乐（也可以是 bgm.ogg 或 bgm.wav），会循环播放
+
+格式要求：音效和吆喝用 WAV（16 位 PCM）；背景音乐 mp3 / ogg / wav 都行。
+每一类声音都能在游戏顶栏「设置」里单独开关，总音量也能调，选择会自动保存。
+免费古风配乐可以在 freesound.org、itch.io（筛选 Free，搜 chinese music / guzheng）、
+或 Pixabay Music 找，选可以免费商用的。
+免费录音素材可以在 freesound.org 搜 knife chopping、frying、sizzle、coins、wind chime，
+优先选 CC0 授权；用了就记到 art/CREDITS.txt。
