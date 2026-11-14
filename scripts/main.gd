@@ -4095,6 +4095,9 @@ func _autoplay_popup(title: String) -> void:
 
 
 func _autoplay_tick() -> void:
+	if week() % 4 == 0 and weekday() == 2 and day_time > 100.0 and not auto_done.has("w%d" % week()):
+		auto_done["w%d" % week()] = true
+		_shot("play_w%02d" % week())
 	for d in dishes:  # 只急购菜单上用得到的食材
 		var k: int = d.food
 		if d.unlocked and food[k] < LOW_FOOD and money > 400:
