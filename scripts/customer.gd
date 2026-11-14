@@ -24,6 +24,7 @@ var timer := 0.0
 var order = null
 var angry := false
 var anim := 0.0
+var said_yum := false  # 吃到一半夸过一句了
 
 
 func setup(t: Dictionary, d: Dictionary, table: int) -> void:
@@ -55,6 +56,10 @@ func _process(delta: float) -> void:
 				leave_angry()
 		S.EATING:
 			timer -= delta
+			if not said_yum and timer < EAT_TIME * 0.5:
+				said_yum = true
+				if randf() < 0.5:
+					main._float_text(position + Vector2(0, -60), ["香！", "嗯～", "好吃！", "妙啊"].pick_random(), Color.WHITE)
 			if timer <= 0.0:
 				main.customer_done_eating(self)
 		S.SELF_PAY:
@@ -134,6 +139,8 @@ func _draw() -> void:
 	var walking := state == S.WALK_IN or state == S.LEAVING or (state == S.TO_COUNTER and is_walking())
 	var bob := absf(sin(anim * 11.0)) * 2.5 if walking else 0.0
 	var o := Vector2(0, -bob)
+	if state == S.EATING:
+		o.y += absf(sin(anim * 5.0)) * 2.0  # 低头夹菜、抬头吃
 	if not draw_sprite(o, main.art.guest(gtype.name)):
 		draw_body(o, robe, true, sash)
 		_draw_hat(o)
@@ -145,6 +152,11 @@ func _draw() -> void:
 			_bubble(o + Vector2(0, -66), dish.name, Color("3b2a1a"))
 			_patience_bar(o + Vector2(0, -48))
 		S.EATING:
+			# 筷子一上一下：从碗里夹到嘴边
+			var lift := (sin(anim * 5.0) + 1.0) * 0.5
+			var tip := o + Vector2(10, -14 - lift * 16.0)
+			draw_line(tip + Vector2(8, 12), tip, Color("6b4226"), 1.5)
+			draw_line(tip + Vector2(10, 11), tip + Vector2(2, -1), Color("6b4226"), 1.5)
 			var ratio := clampf(1.0 - timer / EAT_TIME, 0.0, 1.0)
 			draw_rect(Rect2(o + Vector2(-14, -48), Vector2(28, 4)), Color(0, 0, 0, 0.45))
 			draw_rect(Rect2(o + Vector2(-14, -48), Vector2(28 * ratio, 4)), Color("8fd16a"))

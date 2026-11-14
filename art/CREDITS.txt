@@ -1,3 +1,7 @@
 素材来源与授权记录
 （每加一个外部素材，就在这里记一行：文件 / 作者 / 来源网址 / 授权）
 
+
+guests/ staff/ furniture/ dishes/ portraits/ 下全部图片
+  —— 2026-11-14 用 OpenAI 图像生成（通过 Codex CLI 的 image_generation 工具）为本项目原创生成，
+     再按游戏尺寸去光晕、裁边、缩放。无第三方素材。

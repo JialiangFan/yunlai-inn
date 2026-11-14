@@ -161,6 +161,7 @@ var regular_today := {}  # 今天来过的常客
 
 var chars_layer: Node2D
 var fx_layer: Node2D
+var flights: Array = []  # 飞行中的特效：菜飞到出菜口、铜钱飞进钱匣、上菜的热气。{"kind", "from", "to", "start", "dur", "dish"}
 
 # 自动测试：命令行加 -- --autotest [--shots=截图目录]
 var autotest := false
@@ -245,6 +246,7 @@ func _ready() -> void:
 	fx_layer = Node2D.new()
 	fx_layer.z_index = 10
 	add_child(fx_layer)
+	fx_layer.draw.connect(_draw_flights)
 	_init_dishes()
 	for r in Data.RIVALS:
 		rivals.append({"rep": r.rep, "price": r.price, "open": int(r.open_week) == 1, "closed": false, "weak": 0})
@@ -747,7 +749,7 @@ func build_steps(w, t: Dictionary) -> Array:
 		"order":
 			return [
 				{"move": serve_pos(ti)},
-				{"wait": 0.8, "do": _take_order.bind(w, t.customer)},
+				{"wait": 0.8, "do": _take_order.bind(w, t.customer), "anim": "write"},
 				{"move": PICKUP_POS},
 				{"wait": 0.3, "do": _hand_to_kitchen.bind(w)},
 			]
@@ -761,7 +763,7 @@ func build_steps(w, t: Dictionary) -> Array:
 		"clean":
 			return [
 				{"move": serve_pos(ti)},
-				{"wait": 1.0, "do": _clean_table.bind(ti)},
+				{"wait": 1.0, "do": _clean_table.bind(ti), "anim": "wipe"},
 			]
 	return []
 
@@ -805,6 +807,7 @@ func _pick_up(w, o) -> bool:
 	if o.canceled:
 		return false
 	w.carrying = o.dish.color
+	w.carrying_name = o.dish.name
 	return true
 
 
@@ -815,6 +818,7 @@ func _serve(w, o) -> bool:
 		return false
 	tables[o.table_idx].plate = o.dish.color
 	tables[o.table_idx].dish_name = o.dish.name
+	_fly("puff", TABLE_SLOTS[o.table_idx] + Vector2(-8, -2), Vector2.ZERO, 0.7)
 	o.customer.serve()
 	sfx.play("ding", -4.0)
 	sfx.voice("serve", 0.3)
@@ -842,6 +846,10 @@ func dish_ready(o) -> void:
 		stats.wasted += 1
 		return
 	pass_orders.append(o)
+	var chefs := staff_of("厨师")
+	for ci in chefs.size():
+		if chefs[ci].order == o:
+			_fly("dish", STOVE_POS[mini(ci, STOVE_POS.size() - 1)], PASS_POS, 0.45, 0.0, o.dish.name)
 	tasks.append({"type": "deliver", "table": o.table_idx, "order": o, "created": clock})
 
 
@@ -931,6 +939,9 @@ func customer_paid(c) -> void:
 	_change_rep(rep_delta)
 	var income: int = c.price + tip
 	money += income
+	if not staff_of("掌柜").is_empty():  # 铜钱一枚枚飞进柜台的钱匣
+		for j in clampi(income / 30 + 1, 1, 6):
+			_fly("coin", c.position + Vector2(0, -24), CASHIER_POS + Vector2(-20, 18), 0.4, j * 0.08)
 	sfx.play("coin", -5.0)
 	sfx.voice("bye", 0.25)
 	stats.served += 1
@@ -1970,6 +1981,46 @@ func _shadow(center: Vector2, r: float) -> void:
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
+## 几缕往上飘的热气。strength 0~1 控制浓淡。
+func _steam(p: Vector2, t: float, strength: float) -> void:
+	for k in 3:
+		var rise := fmod(t * 14.0 + k * 7.0, 21.0)
+		var x := sin(t * 3.0 + k * 2.0 + rise * 0.2) * 3.0 + (k - 1) * 5.0
+		_disc(p + Vector2(x, -rise), 2.5 + rise * 0.12, Color(1, 1, 1, (0.45 - rise / 50.0) * strength))
+
+
+func _fly(kind: String, from: Vector2, to: Vector2, dur: float, delay := 0.0, dish_name := "") -> void:
+	flights.append({"kind": kind, "from": from, "to": to, "start": clock + delay, "dur": dur, "dish": dish_name})
+
+
+## 画在最上层 fx_layer 上，盖住人物。
+func _draw_flights() -> void:
+	for f in flights.duplicate():
+		var k: float = (clock - float(f.start)) / float(f.dur)
+		if k < 0.0:
+			continue
+		if k >= 1.0:
+			flights.erase(f)
+			continue
+		var p: Vector2 = f.from.lerp(f.to, k) + Vector2(0, -sin(k * PI) * 30.0)  # 抛物线
+		match f.kind:
+			"dish":
+				var dt: Texture2D = art.dish(f.dish)
+				if dt != null:
+					fx_layer.draw_texture_rect(dt, Rect2(p - Vector2(11, 11), Vector2(22, 22)), false)
+				else:
+					fx_layer.draw_circle(p, 8.0, Color("f8f4ea"))
+			"coin":
+				fx_layer.draw_circle(p, 5.0, Color("d4a640"))
+				fx_layer.draw_circle(p, 3.0, Color("ffd34d"))
+				fx_layer.draw_rect(Rect2(p - Vector2(1.2, 1.2), Vector2(2.4, 2.4)), Color("8a6a1a"))
+			"puff":  # 原地一团热气散开
+				for j in 5:
+					var a := j * TAU / 5.0
+					fx_layer.draw_circle(f.from + Vector2(cos(a), sin(a) * 0.6) * (6.0 + k * 14.0) + Vector2(0, -k * 10.0), 4.0 + k * 3.0, Color(1, 1, 1, 0.55 * (1.0 - k)))
+	fx_layer.queue_redraw()
+
+
 func _draw() -> void:
 	draw_rect(Rect2(0, 0, 1280, 720), Color("2b1d14"))
 	if is_rest_day:
@@ -2042,10 +2093,19 @@ func _draw_kitchen() -> void:
 				var fp := sp + Vector2(-25 + k * 50, 8)
 				_disc(fp, 3.5 + sin(t * 14.0 + k) * 1.2, Color("ff8a1c"))
 				_disc(fp + Vector2(0, 1), 2.0, Color("ffd34d"))
-			_disc(sp + Vector2(0, 3), 7.5, Color(chef.order.dish.color))
-			for k in 2:
-				var rise := fmod(t * 20.0 + k * 10.0, 20.0)
-				_disc(sp + Vector2(-5 + k * 10, -8 - rise), 3.0, Color(1, 1, 1, 0.5 - rise / 40.0))
+			# 颠勺：菜被抛起再落回锅里
+			var toss := maxf(0.0, sin(t * 7.0 + i * 1.7)) * 12.0
+			var dtex: Texture2D = art.dish(chef.order.dish.name)
+			if dtex != null:
+				draw_texture_rect(dtex, Rect2(sp + Vector2(-9, -6 - toss), Vector2(18, 18)), false)
+			else:
+				_disc(sp + Vector2(0, 3 - toss), 7.5, Color(chef.order.dish.color))
+			for k in 4:  # 火星
+				var a := fmod(t * 3.0 + k * 0.37 + i, 1.0)
+				_disc(sp + Vector2(sin(k * 2.3 + i) * 16.0 * a, 10 - a * 26.0), 1.6 * (1.0 - a), Color(1.0, 0.75, 0.2, 1.0 - a))
+			_steam(sp + Vector2(0, -10), t + i, 1.0)
+			var done: float = 1.0 - chef.cook_timer / chef.cook_total
+			draw_arc(sp + Vector2(0, 3), 24.0, -PI / 2.0, -PI / 2.0 + TAU * clampf(done, 0.0, 1.0), 32, Color("ffd34d"), 3.0, true)
 	# 柜台和出菜口
 	draw_rect(Rect2(20, 178, 860, 22), Color("6b4226"))
 	draw_rect(Rect2(20, 178, 860, 5), Color("8b5a2b"))
@@ -2440,8 +2500,17 @@ func _draw_tables() -> void:
 		if t.plate != "":
 			var pp := p + Vector2(-8, -2)
 			var dish_tex: Texture2D = null if t.dirty else art.dish(t.dish_name)
+			# 正在吃：菜一点点变少，冒热气
+			var left := 1.0
+			var c = t.customer
+			if c != null and is_instance_valid(c) and c.state == Customer.S.EATING:
+				left = clampf(c.timer / Customer.EAT_TIME, 0.0, 1.0)
 			if dish_tex != null:
-				draw_texture_rect(dish_tex, Rect2(pp - Vector2(15, 15), Vector2(30, 30)), false)
+				_disc(pp, 13.0, Color("f8f4ea"))  # 空盘底
+				var sz := 30.0 * (0.45 + 0.55 * left)
+				draw_texture_rect(dish_tex, Rect2(pp - Vector2(sz, sz) / 2.0, Vector2(sz, sz)), false)
+				if left < 1.0:
+					_steam(pp + Vector2(0, -8), clock + i, left)
 			else:
 				_disc(pp, 10.0, Color("f8f4ea"))
 				if t.dirty:

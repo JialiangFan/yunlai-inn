@@ -10,6 +10,7 @@ var home := Vector2.ZERO
 var steps: Array = []  # 每一步：{"move": 位置} 或 {"wait": 秒数, "do": 回调}
 var wait_timer := 0.0
 var carrying := ""  # 端着的菜的颜色
+var carrying_name := ""  # 端着的菜名，有菜图就画菜图
 var order_slip = null  # 记下了、还没交给后厨的菜单
 var order = null  # 厨师正在做的菜
 var cook_timer := 0.0
@@ -48,6 +49,7 @@ func reset_work() -> void:
 	steps.clear()
 	path.clear()
 	carrying = ""
+	carrying_name = ""
 	order_slip = null
 	order = null
 	pay_target = null
@@ -143,6 +145,7 @@ func _run_step(delta: float) -> void:
 			if not ok:
 				steps.clear()
 				carrying = ""
+				carrying_name = ""
 				order_slip = null
 
 
@@ -183,10 +186,23 @@ func _draw() -> void:
 			draw_rect(Rect2(o + Vector2(-7, 2), Vector2(14, 9)), Color("f4f1ea"))  # 围裙
 			draw_rect(Rect2(o + Vector2(5, -12), Vector2(9, 4)), Color.WHITE)  # 肩上的毛巾
 			draw_rect(Rect2(o + Vector2(-7, -25), Vector2(14, 4)), sash.darkened(0.3))  # 小帽
+	var acting := "" if steps.is_empty() or wait_timer <= 0.0 else str(steps[0].get("anim", ""))
 	if carrying != "":
-		var hp := o + Vector2(14, -10)
-		disc(hp, 8.0, Color("f8f4ea"))
-		disc(hp, 5.0, Color(carrying))
+		var hp := o + Vector2(14, -14 + sin(anim * 12.0) * 1.5)  # 托着走，盘子微微晃
+		var dt: Texture2D = main.art.dish(carrying_name)
+		if dt != null:
+			draw_texture_rect(dt, Rect2(hp - Vector2(10, 10), Vector2(20, 20)), false)
+		else:
+			disc(hp, 8.0, Color("f8f4ea"))
+			disc(hp, 5.0, Color(carrying))
+	elif acting == "write":  # 掏出小本子记菜名，笔尖在动
+		draw_rect(Rect2(o + Vector2(8, -16), Vector2(12, 14)), Color("fffdf6"))
+		draw_rect(Rect2(o + Vector2(8, -16), Vector2(12, 14)), Color("8a7560"), false, 1.0)
+		var pen := o + Vector2(10 + fmod(anim * 18.0, 8.0), -10 + int(anim * 2.5) % 3 * 3)
+		draw_line(pen, pen + Vector2(5, -7), Color("2b1d14"), 1.5)
+	elif acting == "wipe":  # 抹布在桌上打圈
+		var rp := o + Vector2(16, -6) + Vector2(cos(anim * 9.0), sin(anim * 9.0) * 0.6) * 5.0
+		draw_rect(Rect2(rp - Vector2(5, 3), Vector2(10, 6)), Color("dfe8e8"))
 	elif order_slip != null:
 		draw_rect(Rect2(o + Vector2(10, -9), Vector2(9, 11)), Color("fffdf6"))
 		draw_line(o + Vector2(12, -6), o + Vector2(17, -6), Color("888888"), 1.0)
@@ -206,16 +222,29 @@ func _draw() -> void:
 		draw_arc(Vector2(0, 14), 17.0, 0.0, TAU, 32, Color("ffd34d"), 2.0, true)
 	# 状态
 	if slack_timer > 0.0:
-		draw_string_outline(f, o + Vector2(-20, -40), "偷懒…", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, 3, Color(1, 1, 1, 0.8))
-		draw_string(f, o + Vector2(-20, -40), "偷懒…", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("7a6a5a"))
+		draw_string_outline(f, o + Vector2(-20, -52), "偷懒…", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, 3, Color(1, 1, 1, 0.8))
+		draw_string(f, o + Vector2(-20, -52), "偷懒…", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("7a6a5a"))
 	elif info.role == "厨师" and order != null:
 		_bar(Vector2(-22, 18), 44.0, 1.0 - cook_timer / cook_total, Color("f39c12"))
 		var dish_name: String = order.dish.name
 		draw_string(f, Vector2(24, 4), dish_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("3b2a1a"))
 	elif info.role == "掌柜" and pay_target != null:
-		_bar(Vector2(-16, -38), 32.0, 1.0 - pay_timer / pay_total, Color("ffd34d"))
+		_abacus(Vector2(-22, 2))
+		_bar(Vector2(-16, -50), 32.0, 1.0 - pay_timer / pay_total, Color("ffd34d"))
 	elif not steps.is_empty() and steps[0].has("wait") and wait_timer > 0.0:
-		_bar(Vector2(-14, -38), 28.0, wait_timer / _step_time(steps[0]), Color("6fb3e0"))
+		_bar(Vector2(-14, -50), 28.0, wait_timer / _step_time(steps[0]), Color("6fb3e0"))
+
+
+## 掌柜在柜台上拨算盘，算珠左右跳。
+func _abacus(p: Vector2) -> void:
+	draw_rect(Rect2(p, Vector2(44, 18)), Color("5a3a22"))
+	draw_rect(Rect2(p + Vector2(2, 2), Vector2(40, 14)), Color("c8a46a"))
+	for row in 3:
+		var y := p.y + 5.0 + row * 4.0
+		draw_line(Vector2(p.x + 2, y), Vector2(p.x + 42, y), Color("5a3a22"), 1.0)
+		for k in 4:
+			var jump := 3.0 if int(anim * 8.0 + row * 3 + k) % 5 == 0 else 0.0
+			disc(Vector2(p.x + 8 + k * 9 + jump, y), 1.8, Color("2b1d14"))
 
 
 func _bar(pos: Vector2, w: float, ratio: float, col: Color) -> void:
