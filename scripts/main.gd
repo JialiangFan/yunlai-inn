@@ -199,6 +199,22 @@ var lbl_town_status: Label
 var food_rows: Array = []  # 粮行每类食材一行：{"lbl", "buy": [按钮], "rush", "auto"}
 var market_rows: Array = []
 var settings_panel: PanelContainer
+var daylight: CanvasModulate
+var glow_layer: Node2D
+var status_panel: PanelContainer
+var status_body: VBoxContainer
+var calc_panel: PanelContainer
+var calc_info: Label
+var calc_qty_lbl: Label
+var calc_cost_lbl: Label
+var calc_ok: Button
+var calc_kind := 0
+var calc_qty := 0
+var ledger_panel: PanelContainer
+var ledger_body: VBoxContainer
+var ledger_history: Array = []  # 前几周的账：{"week", "start", "end", "items"}，最新的在前
+var calendar_panel: PanelContainer
+var calendar_body: VBoxContainer
 var town_scroll: ScrollContainer
 var town_sections := {}
 var btn_auto_food: Button
@@ -271,6 +287,16 @@ func _ready() -> void:
 	fx_layer.z_index = 10
 	add_child(fx_layer)
 	fx_layer.draw.connect(_draw_flights)
+	# 日夜光照：整个大堂（不含界面）按时辰调色；灯光单独一层用加亮混合画上去
+	daylight = CanvasModulate.new()
+	add_child(daylight)
+	glow_layer = Node2D.new()
+	glow_layer.z_index = 9
+	var glow_mat := CanvasItemMaterial.new()
+	glow_mat.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	glow_layer.material = glow_mat
+	add_child(glow_layer)
+	glow_layer.draw.connect(_draw_glow)
 	_init_dishes()
 	for r in Data.RIVALS:
 		rivals.append({"rep": r.rep, "price": r.price, "open": int(r.open_week) == 1, "closed": false, "weak": 0})
@@ -318,6 +344,7 @@ func _init_dishes() -> void:
 
 
 func _process(delta: float) -> void:
+	_update_daylight()
 	if is_rest_day:
 		queue_redraw()  # 集市里的路人在走
 		return
@@ -360,6 +387,9 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and _calc_key(event):
+		get_viewport().set_input_as_handled()
+		return
 	if is_rest_day and arranging and not popup.visible:
 		var mp := get_global_mouse_position()
 		var mbt := event as InputEventMouseButton
@@ -1282,6 +1312,7 @@ func _start_next_day() -> void:
 
 
 func _enter_rest_day(week_summary := "") -> void:
+	_close_week_ledger()  # 先把这一周的账结了
 	day += 1
 	is_rest_day = true
 	day_over = false
@@ -1360,7 +1391,7 @@ func _enter_rest_day(week_summary := "") -> void:
 
 const SAVE_VARS := ["money", "food", "food_price", "reputation", "day", "decor_level", "table_level", "stove_level", "counter_level", "expand_level",
 	"auto_food_on", "auto_food_target", "contest_idx", "contest_active", "contest_days", "contest_value",
-	"contest_sat_sum", "contest_sat_n", "scholar_loan", "game_finished", "food_fixed", "food_used_week", "food_hist", "seats_last_week", "story_step", "story_wait_week", "regular_friend", "rivals", "chapter", "ending_shown"]
+	"contest_sat_sum", "contest_sat_n", "scholar_loan", "game_finished", "food_fixed", "food_used_week", "food_hist", "seats_last_week", "story_step", "story_wait_week", "regular_friend", "rivals", "chapter", "ending_shown", "ledger", "ledger_history", "week_cash_start"]
 
 
 func _save_path() -> String:
@@ -2364,6 +2395,41 @@ func _draw_flights() -> void:
 	fx_layer.queue_redraw()
 
 
+## 天黑的程度：0 = 白天，1 = 入夜。申时末开始泛黄，酉时渐暗，戌时全黑；休假日的集市一直是白天。
+func night_amount() -> float:
+	if is_rest_day or not game_started:
+		return 0.0
+	return clampf((current_hour() - 17.0) / 2.0, 0.0, 1.0)
+
+
+func _update_daylight() -> void:
+	var h := current_hour()
+	var dusk := 0.0 if (is_rest_day or not game_started) else clampf((h - 15.5) / 1.5, 0.0, 1.0)
+	var n := night_amount()
+	daylight.color = Color.WHITE.lerp(Color(1.0, 0.88, 0.72), dusk).lerp(Color(0.52, 0.56, 0.78), n)
+	glow_layer.queue_redraw()
+
+
+## 夜里的灯光：灯笼、灶火、柜台和门口各一团暖光（加亮混合，叠在调暗的画面上）。
+func _draw_glow() -> void:
+	var n := night_amount()
+	if n < 0.02:
+		return
+	var lights: Array = [[Vector2(450, 690), 70.0], [CASHIER_POS + Vector2(0, 10), 60.0]]
+	if decor_level >= 1:
+		for p in [Vector2(36, 280), Vector2(36, 470), Vector2(864, 280), Vector2(864, 470)]:
+			lights.append([p, 55.0])
+	var chefs := staff_of("厨师")
+	for i in mini(chefs.size(), STOVE_POS.size()):
+		lights.append([STOVE_POS[i] + Vector2(0, 10), 60.0 if chefs[i].order != null else 35.0])
+	var flicker := 0.92 + 0.08 * sin(Time.get_ticks_msec() / 160.0)
+	for l in lights:
+		var p: Vector2 = l[0]
+		var r: float = l[1] * flicker
+		for k in 4:
+			glow_layer.draw_circle(p, r * (1.0 - k * 0.22), Color(1.0, 0.62, 0.25, 0.07 * n), true, -1.0, true)
+
+
 func _draw() -> void:
 	draw_rect(Rect2(0, 0, 1280, 720), Color("2b1d14"))
 	if is_rest_day and not arranging:
@@ -3223,6 +3289,11 @@ func _build_ui() -> void:
 	bar_rep.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	lbl_rep.get_parent().add_child(bar_rep)
 	bar.add_child(_spacer())
+	for spec in [["店况", _open_status], ["日历", _open_calendar], ["账本", _open_ledger]]:
+		var tb := _button(spec[0], spec[1], "BarButton")
+		tb.custom_minimum_size = Vector2(56, 34)
+		tb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		bar.add_child(tb)
 	var sound_btn := _button("设置", _toggle_settings, "BarButton")
 	sound_btn.custom_minimum_size = Vector2(60, 34)
 	sound_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -3270,6 +3341,10 @@ func _build_ui() -> void:
 	log_box.add_child(lbl_log)
 
 	_build_settings(root)
+	_build_calc(root)
+	_build_ledger(root)
+	_build_calendar(root)
+	_build_status(root)
 
 	# 弹窗
 	dim = ColorRect.new()
@@ -3462,6 +3537,8 @@ func _build_town_tab() -> Control:
 			var b := _button("+%d" % amount, _buy_food.bind(k, amount))
 			row.add_child(b)
 			fr.buy.append(b)
+		fr["calc"] = _button("算盘…", _open_calc.bind(k), "SecondaryButton")
+		row.add_child(fr.calc)
 		fr["rush"] = _button("急购 %d" % RUSH_FOOD, _rush_food.bind(k))
 		row.add_child(fr.rush)
 		list.add_child(row)
@@ -3608,6 +3685,7 @@ func _build_contest_tab() -> Control:
 func _refresh_ui() -> void:
 	if lbl_day == null:
 		return
+	_fill_status()
 	lbl_day.text = "%s %s%s　%s%s" % [season().name, _date_text(), "·" + festival_today if festival_today != "" else "", _clock_text(), "　已打烊" if (not is_open and not is_rest_day) else ""]
 	bar_day.value = 1.0 if is_rest_day else clampf(day_time / ((CLOSE_HOUR - OPEN_HOUR) * SECONDS_PER_HOUR), 0.0, 1.0)
 	lbl_money.text = "%d 文" % money
@@ -3673,6 +3751,7 @@ func _refresh_ui() -> void:
 			fr.buy[i].disabled = money < _food_cost(k, FOOD_PACKS[i])
 			fr.buy[i].tooltip_text = "%d 文" % _food_cost(k, FOOD_PACKS[i])
 		fr.rush.visible = not is_rest_day
+		fr.calc.visible = is_rest_day
 		fr.rush.disabled = money < _food_cost(k, RUSH_FOOD) * 2
 		fr.rush.tooltip_text = "营业日急购价翻倍：%d 文" % (_food_cost(k, RUSH_FOOD) * 2)
 		fr.auto.text = "　%s补到 %d" % ["固定 " if food_fixed[k] else "智能 ", auto_food_target[k]]
@@ -3783,7 +3862,349 @@ func _refresh_ui() -> void:
 
 
 func _toggle_settings() -> void:
-	settings_panel.visible = not settings_panel.visible
+	_show_window(settings_panel)
+
+
+# ---------------- 浮动小窗：算盘（进货数量）、账本、日历 ----------------
+
+## 做一个带标题和「关闭」的浮动小窗，返回 [窗口, 内容容器]。
+func _make_window(root: Control, title: String, pos: Vector2, width: float) -> Array:
+	var panel := PanelContainer.new()
+	var sb := _box(Color("f6ead2"), Color("c8963e"), 8, 2, 14)
+	sb.shadow_color = Color(0, 0, 0, 0.4)
+	sb.shadow_size = 10
+	panel.add_theme_stylebox_override("panel", sb)
+	panel.position = pos
+	panel.custom_minimum_size = Vector2(width, 0)
+	panel.hide()
+	root.add_child(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 8)
+	panel.add_child(vb)
+	var head := HBoxContainer.new()
+	head.add_child(_title_label(title, 22, Color("8c2f39")))
+	head.add_child(_spacer())
+	head.add_child(_button("关闭", panel.hide, "SecondaryButton"))
+	vb.add_child(head)
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 6)
+	vb.add_child(body)
+	return [panel, body]
+
+
+## 只开一个小窗：开新的就把别的关掉。
+func _show_window(panel: PanelContainer) -> void:
+	for p in [calc_panel, ledger_panel, calendar_panel, settings_panel, status_panel]:
+		if p != panel:
+			p.hide()
+	panel.visible = not panel.visible
+
+
+# 算盘：休假日在粮行进货时输入任意数量。
+# 键盘：数字键输入，退格删一位，+/- 加减 10，PageUp/PageDown 加减 100，
+#       Home 填到买得起的最多，End 清零，/ 减半，* 翻倍，回车确定，Esc 取消。
+
+func _build_calc(root: Control) -> void:
+	var w := _make_window(root, "算盘 · 进货", Vector2(300, 150), 340)
+	calc_panel = w[0]
+	var body: VBoxContainer = w[1]
+	calc_info = _wrap(_label("", 15), 310.0)
+	body.add_child(calc_info)
+	calc_qty_lbl = _title_label("", 34, Color("3b2a1a"))
+	calc_qty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	var qbox := PanelContainer.new()
+	qbox.add_theme_stylebox_override("panel", _box(Color("2a1a10"), Color("8b5a2b"), 4, 2, 8))
+	calc_qty_lbl.add_theme_color_override("font_color", Color("ffd34d"))
+	qbox.add_child(calc_qty_lbl)
+	body.add_child(qbox)
+	calc_cost_lbl = _label("", 15, Color("8c2f39"))
+	body.add_child(calc_cost_lbl)
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 4)
+	grid.add_theme_constant_override("v_separation", 4)
+	for spec in [["−100", "add", -100], ["−10", "add", -10], ["+10", "add", 10], ["+100", "add", 100],
+			["减半", "half", 0], ["翻倍", "double", 0], ["最多", "max", 0], ["清零", "clear", 0]]:
+		var b := _button(spec[0], _calc_op.bind(spec[1], spec[2]), "SecondaryButton")
+		b.custom_minimum_size = Vector2(74, 32)
+		grid.add_child(b)
+	body.add_child(grid)
+	body.add_child(_hint("键盘也能用：数字键输入、+ − 加减 10、PageUp/PageDown 加减 100、Home 最多、End 清零、/ 减半、* 翻倍、回车确定。"))
+	calc_ok = _button("进货", _calc_confirm)
+	calc_ok.custom_minimum_size = Vector2(0, 38)
+	body.add_child(calc_ok)
+
+
+func _open_calc(k: int) -> void:
+	if not is_rest_day:
+		return
+	calc_kind = k
+	calc_qty = 0
+	_show_window(calc_panel)
+	_calc_refresh()
+
+
+func _calc_max() -> int:
+	return clampi(int(floor(money / maxf(_food_mult(calc_kind), 0.01))), 0, 9999)
+
+
+func _calc_op(op: String, n: int) -> void:
+	match op:
+		"add":
+			calc_qty += n
+		"half":
+			calc_qty /= 2
+		"double":
+			calc_qty *= 2
+		"max":
+			calc_qty = _calc_max()
+		"clear":
+			calc_qty = 0
+		"digit":
+			calc_qty = calc_qty * 10 + n
+		"back":
+			calc_qty /= 10
+	calc_qty = clampi(calc_qty, 0, 9999)
+	_calc_refresh()
+
+
+func _calc_refresh() -> void:
+	var fk: Dictionary = Data.FOOD_KINDS[calc_kind]
+	var mult := _food_mult(calc_kind)
+	calc_info.text = "进「%s」：本周行情 %.2f 文/份\n库存 %d，自动补货目标 %d" % [fk.name, mult, food[calc_kind], auto_food_target[calc_kind]]
+	calc_qty_lbl.text = "%d 份" % calc_qty
+	var cost := _food_cost(calc_kind, calc_qty)
+	calc_cost_lbl.text = "合计 %d 文（手头 %d 文，最多买得起 %d 份）" % [cost, money, _calc_max()]
+	calc_ok.disabled = calc_qty <= 0 or cost > money
+	calc_ok.text = "进货 %d 份" % calc_qty if calc_qty > 0 else "进货"
+
+
+func _calc_confirm() -> void:
+	if calc_qty <= 0 or _food_cost(calc_kind, calc_qty) > money:
+		return
+	_buy_food(calc_kind, calc_qty)
+	sfx.play("coin", -4.0)
+	calc_panel.hide()
+
+
+## 算盘开着时的键盘操作，处理了返回 true。
+func _calc_key(k: InputEventKey) -> bool:
+	if not calc_panel.visible or not k.pressed:
+		return false
+	var code := k.keycode
+	if code >= KEY_0 and code <= KEY_9:
+		_calc_op("digit", code - KEY_0)
+	elif code >= KEY_KP_0 and code <= KEY_KP_9:
+		_calc_op("digit", code - KEY_KP_0)
+	else:
+		match code:
+			KEY_BACKSPACE:
+				_calc_op("back", 0)
+			KEY_KP_ADD, KEY_EQUAL, KEY_PLUS:
+				_calc_op("add", 10)
+			KEY_KP_SUBTRACT, KEY_MINUS:
+				_calc_op("add", -10)
+			KEY_PAGEUP:
+				_calc_op("add", 100)
+			KEY_PAGEDOWN:
+				_calc_op("add", -100)
+			KEY_HOME:
+				_calc_op("max", 0)
+			KEY_END:
+				_calc_op("clear", 0)
+			KEY_KP_DIVIDE, KEY_SLASH:
+				_calc_op("half", 0)
+			KEY_KP_MULTIPLY, KEY_ASTERISK:
+				_calc_op("double", 0)
+			KEY_ENTER, KEY_KP_ENTER:
+				_calc_confirm()
+			KEY_ESCAPE:
+				calc_panel.hide()
+			_:
+				return false
+	return true
+
+
+# 账本：本周（进行中）和前三周的现金流水，按类别列出。
+
+const LEDGER_ORDER := ["营业", "比赛", "事件", "工钱", "租金", "常规采购", "急购本金", "急购加价", "店面", "研发", "招人", "税与失窃", "其他"]
+
+
+func _build_ledger(root: Control) -> void:
+	var w := _make_window(root, "账本", Vector2(240, 80), 600)
+	ledger_panel = w[0]
+	ledger_body = w[1]
+
+
+func _open_ledger() -> void:
+	_show_window(ledger_panel)
+	if not ledger_panel.visible:
+		return
+	for ch in ledger_body.get_children():
+		ch.queue_free()
+	var cols: Array = [{"title": "本周（进行中）", "start": week_cash_start, "end": money, "items": ledger}]
+	for h in ledger_history:
+		cols.append({"title": "第 %d 周" % int(h.week), "start": int(h.start), "end": int(h.end), "items": h["items"]})
+	var grid := GridContainer.new()
+	grid.columns = cols.size() + 1
+	grid.add_theme_constant_override("h_separation", 18)
+	grid.add_theme_constant_override("v_separation", 3)
+	grid.add_child(_label("", 14))
+	for c in cols:
+		grid.add_child(_title_label(c.title, 15, Color("8b5a2b")))
+	var rows := [["期初银钱", "start"]]
+	for cat in LEDGER_ORDER:
+		rows.append([cat, cat])
+	rows.append(["期末银钱", "end"])
+	for r in rows:
+		var key: String = r[1]
+		var is_edge := key == "start" or key == "end"
+		grid.add_child(_label(r[0], 14, Color("3b2a1a") if is_edge else Color("5a4030")))
+		for c in cols:
+			var v := int(c[key]) if is_edge else int(c["items"].get(key, 0))
+			var col := Color("3b2a1a")
+			if not is_edge:
+				col = Color("3f7d3a") if v > 0 else (Color("a8392a") if v < 0 else Color("b0a08a"))
+			var txt := "%d" % v if is_edge else ("%+d" % v if v != 0 else "—")
+			var l := _label(txt, 14, col)
+			l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+			grid.add_child(l)
+	ledger_body.add_child(grid)
+	ledger_body.add_child(_hint("每个休假日结一次账，账本最多留前三周。「其他」是没单独记账的零碎进出（比如书生还的谢礼）。"))
+
+
+## 休假日结账：把这周的流水存进账本，开始记下一周。
+func _close_week_ledger() -> void:
+	var known := 0
+	for k in ledger:
+		known += int(ledger[k])
+	ledger["其他"] = money - week_cash_start - known
+	ledger_history.push_front({"week": week(), "start": week_cash_start, "end": money, "items": ledger.duplicate()})
+	while ledger_history.size() > 3:
+		ledger_history.pop_back()
+	ledger = {}
+	week_cash_start = money
+
+
+# 店况：一眼看清客栈眼下怎么样。开着的时候随营业实时刷新。
+
+func _build_status(root: Control) -> void:
+	var w := _make_window(root, "店况", Vector2(30, 70), 360)
+	status_panel = w[0]
+	status_body = w[1]
+
+
+func _open_status() -> void:
+	_show_window(status_panel)
+	_fill_status()
+
+
+func _fill_status() -> void:
+	if status_panel == null or not status_panel.visible:
+		return
+	for ch in status_body.get_children():
+		ch.queue_free()
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 12)
+	var face: Texture2D = art.staff("掌柜", int(staff_of("掌柜")[0].info.get("look", 0))) if not staff_of("掌柜").is_empty() else null
+	if face != null:
+		var tr := TextureRect.new()
+		tr.texture = face
+		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tr.custom_minimum_size = Vector2(70, 90)
+		top.add_child(tr)
+	var head := VBoxContainer.new()
+	head.add_child(_title_label("%s季 · %s" % [season().name, _date_text()], 17, Color("3b2a1a")))
+	head.add_child(_label(_clock_text() + ("　营业中" if (is_open and not is_rest_day) else "　歇业"), 14, Color("6b5a44")))
+	head.add_child(_label(Data.CHAPTERS[mini(chapter, Data.CHAPTERS.size() - 1)].title, 14, Color("8c2f39")))
+	top.add_child(head)
+	status_body.add_child(top)
+	var served: int = stats.get("served", 0)
+	var rows := [
+		["银钱", "%d 文" % money],
+		["声望", "%d / 100" % int(reputation)],
+		["今日来客", "%d 位（招待 %d，气走 %d，客满错过 %d）" % [stats.get("visitors", 0), served, stats.get("angry", 0), stats.get("lost_full", 0)]],
+		["今日营收", "%d 文" % int(stats.get("income", 0))],
+		["今日满意度", ("%d%%" % int(float(stats.get("sat_sum", 0.0)) / served * 100.0)) if served > 0 else "—"],
+		["伙计 / 座位", "%d 人 / %d 座" % [staff.size(), tables.size()]],
+		["比赛奖杯", "%d / %d" % [contest_idx, Data.CONTESTS.size()]],
+	]
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 14)
+	grid.add_theme_constant_override("v_separation", 4)
+	for r in rows:
+		grid.add_child(_label(r[0], 14, Color("8b5a2b")))
+		grid.add_child(_wrap(_label(r[1], 14, Color("3b2a1a")), 230.0))
+	status_body.add_child(grid)
+
+
+# 日历：这一季的四周，标出今天、休假日、节庆和比赛周。
+
+func _build_calendar(root: Control) -> void:
+	var w := _make_window(root, "日历", Vector2(250, 90), 560)
+	calendar_panel = w[0]
+	calendar_body = w[1]
+
+
+func _open_calendar() -> void:
+	_show_window(calendar_panel)
+	if not calendar_panel.visible:
+		return
+	for ch in calendar_body.get_children():
+		ch.queue_free()
+	var si := season_of_week(week())
+	var se: Dictionary = Data.SEASONS[si]
+	var first_week := ((week() - 1) / Data.WEEKS_PER_SEASON) * Data.WEEKS_PER_SEASON + 1
+	calendar_body.add_child(_title_label("%s季（第 %d～%d 周）" % [se.name, first_week, first_week + Data.WEEKS_PER_SEASON - 1], 18, Color("3b2a1a")))
+	calendar_body.add_child(_wrap(_label(se.desc, 13, Color("6b5a44")), 530.0))
+	var grid := GridContainer.new()
+	grid.columns = 7
+	grid.add_theme_constant_override("h_separation", 4)
+	grid.add_theme_constant_override("v_separation", 4)
+	for wd in Data.WEEKDAYS:
+		var h := _label(wd, 13, Color("8b5a2b"))
+		h.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		h.custom_minimum_size = Vector2(72, 0)
+		grid.add_child(h)
+	# 休假日报的名，比的是下一周；营业日里比的就是这一周
+	var contest_week := (week() + (1 if is_rest_day else 0)) if contest_active else -1
+	for wi in Data.WEEKS_PER_SEASON:
+		var wk := first_week + wi
+		for wd in 7:
+			var d := (wk - 1) * 7 + wd + 1
+			var lines := PackedStringArray(["%d 日" % d])
+			var fest := ""
+			for f in Data.FESTIVALS:
+				if int(f.season) == si and int(f.week) == wi and int(f.weekday) == wd:
+					fest = f.name
+			if fest != "":
+				lines.append(fest)
+			elif wd == 6:
+				lines.append("逛集市")
+			if wk == contest_week and wd < 6:
+				lines.append("比赛")
+			var bg := Color("fffaf0")
+			if wd == 6:
+				bg = Color("e8dcc0")
+			if fest != "":
+				bg = Color("f6d2c0")
+			if wk == contest_week and wd < 6:
+				bg = Color("f3e2a8")
+			if d < day:
+				bg = bg.darkened(0.12)
+			var border := Color("8c2f39") if d == day else Color("d9c09a")
+			var cell := PanelContainer.new()
+			cell.add_theme_stylebox_override("panel", _box(bg, border, 4, 3 if d == day else 1, 4))
+			cell.custom_minimum_size = Vector2(72, 52)
+			var l := _label("\n".join(lines), 12, Color("3b2a1a") if d >= day else Color("8a7a6a"))
+			l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			cell.add_child(l)
+			grid.add_child(cell)
+	calendar_body.add_child(grid)
+	var next_se: Dictionary = Data.SEASONS[(si + 1) % Data.SEASONS.size()]
+	calendar_body.add_child(_hint("红框是今天。下一季是%s季：%s" % [next_se.name, next_se.desc]))
 
 
 ## 设置面板：总音量 + 四类声音各自开关。改了就生效、自动保存。
@@ -3933,6 +4354,12 @@ func _autotest_tick() -> void:
 	if day == 3 and day_time > 100.0 and not auto_done.has("shot_d3"):
 		auto_done["shot_d3"] = true
 		_shot("d3_busy")
+	if day == 3 and current_hour() > 19.3 and not auto_done.has("shot_night"):
+		auto_done["shot_night"] = true
+		_open_status()
+		print("[autotest] night=%.2f status_visible=%s" % [night_amount(), status_panel.visible])
+		await _shot("d3_night")
+		status_panel.hide()
 	if day == 9 and day_time > 100.0 and not auto_done.has("shot_d9"):
 		auto_done["shot_d9"] = true
 		tabs.current_tab = 4
@@ -4015,6 +4442,23 @@ func _autotest_rest_day() -> void:
 			sfx.volume, sfx.sfx_on, sfx.voice_on, sfx.ambient_on, sfx.music_on, sfx.has_music()])
 		await _shot("settings")
 		_toggle_settings()
+		_open_calc(0)
+		for key in [KEY_3, KEY_0, KEY_PAGEUP, KEY_KP_MULTIPLY]:  # 30 → 130 → 260
+			var ev := InputEventKey.new()
+			ev.keycode = key
+			ev.pressed = true
+			_calc_key(ev)
+		print("[autotest] calc qty=%d (expect 260)" % calc_qty)
+		await _shot("calc")
+		var food_before: int = food[0]
+		_calc_confirm()
+		print("[autotest] calc bought: %d -> %d" % [food_before, food[0]])
+		_open_ledger()
+		print("[autotest] ledger weeks=%d last_end=%d" % [ledger_history.size(), int(ledger_history[0].end) if not ledger_history.is_empty() else -1])
+		await _shot("ledger")
+		_open_calendar()
+		await _shot("calendar")
+		calendar_panel.hide()
 		_save_game()
 		var before := "%d|%d|%s|%s|%s|%s|%s|%s" % [money, staff.size(), research.points, str(ornaments), staff[0].info.stats, food, food_price, pieces]
 		_load_game()
@@ -4138,19 +4582,14 @@ func _autoplay_rest_day() -> void:
 	if _contest_block_reason() == "" and money - int(Data.CONTESTS[contest_idx].fee) >= CASH_RESERVE:
 		_sign_contest()
 	# 周报：本周现金流（期初 → 期末，各类相加，对不上的部分记「其他」）
-	var known := 0
-	for k in ledger:
-		known += int(ledger[k])
-	ledger["其他"] = money - week_cash_start - known
+	var last_week: Dictionary = ledger_history[0] if not ledger_history.is_empty() else {"start": money, "items": {}}
 	print("[play] W%02d %s cash %d->%d rep=%d seats_next=%d staff=%d | visit=%d served=%d full=%d(%d%%) angry=%d price=%d sat=%d%% | ch=%d contest=%d exp=%d decor=%d tbl=%d stove=%d ctr=%d | rivals=%s | %s" % [
-		week(), season().name, week_cash_start, money, int(reputation), tables.size(), staff.size(),
+		week(), season().name, int(last_week.start), money, int(reputation), tables.size(), staff.size(),
 		w.get("visitors", 0), w.get("served", 0), w.get("lost_full", 0), int(full_rate * 100.0), w.get("angry", 0), w.get("lost_price", 0),
 		int(float(w.get("sat", 0.0)) / maxf(1.0, float(w.get("served", 0))) * 100.0),
 		chapter, contest_idx, expand_level, decor_level, table_level, stove_level, counter_level,
-		rivals.map(func(x): return "%d%s" % [int(x.rep), "" if x.open else ("x" if x.closed else "-")]), str(ledger)])
+		rivals.map(func(x): return "%d%s" % [int(x.rep), "" if x.open else ("x" if x.closed else "-")]), str(last_week["items"])])
 	week_sum = {}
-	ledger = {}
-	week_cash_start = money
 	if week() >= autoplay_weeks:
 		print("[play] done")
 		get_tree().quit()

@@ -163,9 +163,11 @@ func _draw() -> void:
 		S.WANT_ORDER:
 			_bubble(o + Vector2(0, -66), "点菜！", Color("c0392b"))
 			_patience_bar(o + Vector2(0, -48))
+			_mood_face(o + Vector2(24, -48), patience / patience_max)
 		S.WAIT_FOOD:
 			_bubble(o + Vector2(0, -66), dish.name, Color("3b2a1a"))
 			_patience_bar(o + Vector2(0, -48))
+			_mood_face(o + Vector2(24, -48), patience / patience_max)
 		S.EATING:
 			# 筷子：从嘴边伸到桌上的碗里，夹一口再送回来
 			var mouth := o + Vector2(5, -24)
@@ -179,6 +181,7 @@ func _draw() -> void:
 			var ratio := clampf(1.0 - timer / EAT_TIME, 0.0, 1.0)
 			draw_rect(Rect2(o + Vector2(-14, -48), Vector2(28, 4)), Color(0, 0, 0, 0.45))
 			draw_rect(Rect2(o + Vector2(-14, -48), Vector2(28 * ratio, 4)), Color("8fd16a"))
+			_mood_face(o + Vector2(24, -48), 1.0)
 		S.SELF_PAY:
 			_bubble(o + Vector2(0, -66), "自己算账…", Color("8a7560"))
 		S.TO_COUNTER:
@@ -186,6 +189,21 @@ func _draw() -> void:
 		S.LEAVING:
 			if angry:
 				draw_string(main.font, o + Vector2(-12, -46), "哼！", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color("ff5b4b"))
+
+
+## 头顶的小表情：耐心多是绿色笑脸，过半是黄色平嘴，快没耐心了是红色撇嘴。
+func _mood_face(c: Vector2, ratio: float) -> void:
+	var col := Color("5cb85c") if ratio > 0.6 else (Color("f0c040") if ratio > 0.3 else Color("e05040"))
+	disc(c, 6.5, Color(0, 0, 0, 0.35))
+	disc(c, 5.5, col)
+	disc(c + Vector2(-2, -1.5), 0.9, Color("2a1d14"))
+	disc(c + Vector2(2, -1.5), 0.9, Color("2a1d14"))
+	if ratio > 0.6:
+		draw_arc(c + Vector2(0, 0.5), 2.6, 0.3, PI - 0.3, 8, Color("2a1d14"), 1.0, true)
+	elif ratio > 0.3:
+		draw_line(c + Vector2(-2.2, 2.2), c + Vector2(2.2, 2.2), Color("2a1d14"), 1.0)
+	else:
+		draw_arc(c + Vector2(0, 4.6), 2.6, PI + 0.3, TAU - 0.3, 8, Color("2a1d14"), 1.0, true)
 
 
 func _draw_hat(o: Vector2) -> void:
