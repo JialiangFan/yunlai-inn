@@ -5,7 +5,7 @@ extends Node
 
 const RATE := 22050
 const VOICE_GAP := 1.8  # 两句吆喝之间至少隔这么久（秒，按真实时间）
-const NAMES := ["chop", "coin", "bell", "ding", "angry", "click", "sizzle", "gong"]
+const NAMES := ["chop", "coin", "bell", "ding", "angry", "click", "sizzle", "gong", "abacus"]
 const SETTINGS_PATH := "user://settings.cfg"
 
 # 设置（会保存）
@@ -229,6 +229,8 @@ func _synth(n: String) -> AudioStreamWAV:
 			return _make(0.05, _gen_click)
 		"gong":
 			return _make(1.8, _gen_gong)
+		"abacus":
+			return _make(1.1, _gen_abacus)
 	return null
 
 
@@ -280,6 +282,20 @@ func _gen_angry(t: float) -> float:  # 一声低低的叹气，不刺耳
 
 func _gen_click(t: float) -> float:  # 轻轻的木头声
 	return sin(TAU * 900.0 * t) * exp(-t * 90.0) * 0.18
+
+
+# 拨算盘：一串木珠互相磕碰的“噼啪”，间隔不匀，有时两颗连着响
+const ABACUS_HITS := [0.0, 0.11, 0.17, 0.33, 0.42, 0.47, 0.63, 0.78, 0.84, 0.95]
+
+
+func _gen_abacus(t: float) -> float:
+	var v := 0.0
+	for i in ABACUS_HITS.size():
+		var k: float = t - ABACUS_HITS[i]
+		if k >= 0.0 and k < 0.06:
+			var f := 2100.0 + (i % 3) * 380.0  # 每颗珠子音高略不同
+			v += (sin(TAU * f * k) * 0.7 + sin(TAU * f * 1.62 * k) * 0.3) * exp(-k * 160.0)
+	return (v + _soft_noise(0.6) * 0.15 * (1.0 if fmod(t, 0.11) < 0.01 else 0.0)) * 0.25
 
 
 func _gen_gong(t: float) -> float:  # 远处的锣，柔和

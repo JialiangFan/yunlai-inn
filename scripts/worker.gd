@@ -18,6 +18,7 @@ var cook_total := 1.0
 var pay_target = null  # 掌柜正在给结账的客人
 var pay_timer := 0.0
 var pay_total := 1.0
+var abacus_again := false
 var slack_timer := 0.0
 var anim := 0.0
 
@@ -106,10 +107,15 @@ func _cashier(delta: float) -> void:
 		if pay_target != null:
 			pay_total = 2.5 / skill_mult("计算")
 			pay_timer = pay_total
+			main.sfx.play("abacus", -4.0)
+			abacus_again = pay_total > 1.6  # 算得慢的掌柜，半路再拨一阵
 	elif not is_instance_valid(pay_target):
 		pay_target = null
 	else:
 		pay_timer -= delta
+		if abacus_again and pay_timer < pay_total * 0.45:
+			abacus_again = false
+			main.sfx.play("abacus", -6.0)
 		if pay_timer <= 0.0:
 			main.finish_payment(pay_target)
 			pay_target = null
