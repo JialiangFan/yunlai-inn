@@ -77,6 +77,8 @@ const PAY_SPOT := Vector2(790, 696)  # 客人结账排队的第一个位置
 const DECOR_SLOTS := [
 	Vector2(44, 372), Vector2(856, 372), Vector2(44, 566), Vector2(856, 566), Vector2(292, 664), Vector2(610, 664),
 ]
+# 墙上挂画位：后厨与大堂之间的隔墙，避开出菜口。坐标是画轴顶端
+const WALL_SLOTS := [Vector2(90, 186), Vector2(195, 186), Vector2(300, 186), Vector2(600, 186), Vector2(705, 186), Vector2(810, 186)]
 const STOVE_POS := [Vector2(250, 122), Vector2(450, 122), Vector2(650, 122)]
 const TABLE_SLOTS := [
 	Vector2(130, 320), Vector2(290, 320), Vector2(610, 320), Vector2(770, 320),
@@ -111,7 +113,10 @@ var game_finished := false
 var decor_level := 0
 var table_level := 0
 var stove_level := 0
-var ornaments := {}  # 已买的摆件：id -> 摆件位序号
+var ornaments := {}  # 已买的摆件：id -> 摆件位序号（挂画是 WALL_SLOTS 的序号，其余是 DECOR_SLOTS 的）
+var table_slot: Array = []  # 每张桌子摆在哪个桌位（TABLE_SLOTS 序号）
+var arranging := false  # 休假日进店布置
+var drag = null  # 正在拖的东西：{"kind": "table", "i"} 或 {"kind": "orn", "id"}
 var auto_food_on := true  # 休假日自动补货
 var auto_food_target: Array = []  # 各类食材自动补到的数
 var hover_shop := ""  # 集市里鼠标指着的铺子
@@ -203,6 +208,7 @@ var btn_open_shop: Button
 var contest_labels: Array = []
 var lbl_contest: Label
 var btn_contest: Button
+var btn_arrange: Button
 var lbl_rivals: Label
 var lbl_log: RichTextLabel
 var bar_day: ProgressBar
@@ -325,7 +331,19 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if is_rest_day and not popup.visible:
+	if is_rest_day and arranging and not popup.visible:
+		var mp := get_global_mouse_position()
+		var mbt := event as InputEventMouseButton
+		if mbt != null and mbt.button_index == MOUSE_BUTTON_LEFT:
+			if mbt.pressed:
+				drag = _pick_at(mp)
+			elif drag != null:
+				_drop(drag, mp)
+				drag = null
+			queue_redraw()
+		elif event is InputEventMouseMotion and drag != null:
+			queue_redraw()
+	elif is_rest_day and not popup.visible:
 		if event is InputEventMouseMotion:
 			var h := _shop_at(get_global_mouse_position())
 			if h != hover_shop:
@@ -505,12 +523,16 @@ func patience_decay() -> float:
 
 # ---------------- 位置与走道 ----------------
 
+func table_pos(i: int) -> Vector2:
+	return TABLE_SLOTS[int(table_slot[i])]
+
+
 func seat_pos(i: int) -> Vector2:
-	return TABLE_SLOTS[i] + Vector2(-46, 0)
+	return table_pos(i) + Vector2(-46, 0)
 
 
 func serve_pos(i: int) -> Vector2:
-	return TABLE_SLOTS[i] + Vector2(46, 0)
+	return table_pos(i) + Vector2(46, 0)
 
 
 func door_pos() -> Vector2:
@@ -818,7 +840,7 @@ func _serve(w, o) -> bool:
 		return false
 	tables[o.table_idx].plate = o.dish.color
 	tables[o.table_idx].dish_name = o.dish.name
-	_fly("puff", TABLE_SLOTS[o.table_idx] + Vector2(-8, -2), Vector2.ZERO, 0.7)
+	_fly("puff", table_pos(o.table_idx) + Vector2(-8, -2), Vector2.ZERO, 0.7)
 	o.customer.serve()
 	sfx.play("ding", -4.0)
 	sfx.voice("serve", 0.3)
@@ -1222,7 +1244,7 @@ func _save_path() -> String:
 
 
 func _save_game() -> void:
-	var s := {"tables": tables.size(), "ornaments": ornaments, "market": market, "staff": [], "dishes": [], "research": null}
+	var s := {"tables": tables.size(), "table_slot": table_slot, "ornaments": ornaments, "market": market, "staff": [], "dishes": [], "research": null}
 	for k in SAVE_VARS:
 		s[k] = get(k)
 	for w in staff:
@@ -1246,8 +1268,11 @@ func _load_game() -> void:
 	food = food.map(func(v): return int(v))
 	auto_food_target = auto_food_target.map(func(v): return int(v))
 	tables.clear()
+	table_slot.clear()
 	for i in int(s.tables):
 		_add_table()
+	if s.has("table_slot"):
+		table_slot = s.table_slot.map(func(v): return int(v))
 	ornaments.clear()
 	for id in s.ornaments:
 		ornaments[id] = int(s.ornaments[id])
@@ -1307,6 +1332,53 @@ func _after_rest_popup() -> void:
 	tabs.current_tab = 2
 	if autotest:
 		_autotest_rest_day()
+
+
+# ---------------- 休假日布置 ----------------
+
+func _toggle_arrange() -> void:
+	if not is_rest_day:
+		return
+	arranging = not arranging
+	drag = null
+	hover_shop = ""
+	_refresh_ui()
+	queue_redraw()
+
+
+## 鼠标按下的地方有什么能拖的。
+func _pick_at(mp: Vector2):
+	for id in ornaments:
+		var s := int(ornaments[id])
+		var c: Vector2 = WALL_SLOTS[s] + Vector2(0, 30) if _is_wall(id) else DECOR_SLOTS[s] + Vector2(0, -6)
+		if mp.distance_to(c) < 28.0:
+			return {"kind": "orn", "id": id}
+	for i in tables.size():
+		if mp.distance_to(table_pos(i)) < 36.0:
+			return {"kind": "table", "i": i}
+	return null
+
+
+## 松手：放到最近的同类空位；那里已经有东西就两个对调。
+func _drop(d: Dictionary, mp: Vector2) -> void:
+	var slots: Array = TABLE_SLOTS if d.kind == "table" else (WALL_SLOTS if _is_wall(d.id) else DECOR_SLOTS)
+	var best := -1
+	for s in slots.size():
+		if mp.distance_to(slots[s]) < 90.0 and (best < 0 or mp.distance_to(slots[s]) < mp.distance_to(slots[best])):
+			best = s
+	if best < 0:
+		return
+	if d.kind == "table":
+		var other := table_slot.find(best)
+		if other >= 0:
+			table_slot[other] = table_slot[d.i]
+		table_slot[d.i] = best
+	else:
+		for id in ornaments:
+			if id != d.id and _is_wall(id) == _is_wall(d.id) and int(ornaments[id]) == best:
+				ornaments[id] = ornaments[d.id]
+		ornaments[d.id] = best
+	_refresh_ui()
 
 
 # ---------------- 主线与结局 ----------------
@@ -1504,6 +1576,8 @@ func _story_effect(ev: Dictionary, yes: bool) -> String:
 func _end_rest_day() -> void:
 	if not is_rest_day:
 		return
+	arranging = false
+	drag = null
 	_save_game()  # 存下休假日里买的东西
 	chars_layer.visible = true
 	hover_shop = ""
@@ -1650,6 +1724,10 @@ func _table_cost() -> int:
 
 func _add_table() -> void:
 	tables.append({"customer": null, "dirty": false, "plate": "", "dish_name": ""})
+	for s in MAX_TABLES:
+		if not table_slot.has(s):
+			table_slot.append(s)
+			break
 
 
 func _buy_table() -> void:
@@ -1702,12 +1780,14 @@ func _upgrade_stove() -> void:
 	queue_redraw()
 
 
-func _free_slot(after := -1) -> int:
+func _free_slot(after := -1, wall := false) -> int:
 	var used := {}
 	for id in ornaments:
-		used[ornaments[id]] = true
-	for k in range(1, DECOR_SLOTS.size() + 1):
-		var s := (after + k) % DECOR_SLOTS.size()
+		if _is_wall(id) == wall:
+			used[int(ornaments[id])] = true
+	var n: int = WALL_SLOTS.size() if wall else DECOR_SLOTS.size()
+	for k in range(1, n + 1):
+		var s := (after + k) % n
 		if not used.has(s):
 			return s
 	return -1
@@ -1718,7 +1798,7 @@ func _buy_ornament(id: String) -> void:
 		return
 	for it in Data.DECOR_ITEMS:
 		if it.id == id:
-			var slot := _free_slot()
+			var slot := _free_slot(-1, it.get("wall", false))
 			if slot < 0 or money < int(it.cost):
 				return
 			money -= int(it.cost)
@@ -1731,7 +1811,7 @@ func _buy_ornament(id: String) -> void:
 func _move_ornament(id: String) -> void:
 	if not is_rest_day or not ornaments.has(id):
 		return
-	var slot := _free_slot(int(ornaments[id]))
+	var slot := _free_slot(int(ornaments[id]), _is_wall(id))
 	if slot >= 0:
 		ornaments[id] = slot
 		queue_redraw()
@@ -2023,14 +2103,18 @@ func _draw_flights() -> void:
 
 func _draw() -> void:
 	draw_rect(Rect2(0, 0, 1280, 720), Color("2b1d14"))
-	if is_rest_day:
+	if is_rest_day and not arranging:
 		_draw_market()
 		return
 	_draw_kitchen()
 	_draw_hall()
 	_draw_tables()
 	_draw_decor()
-	if is_rest_day:
+	if arranging:
+		var hint := "布置中：按住拖动桌子、摆件、字画，松手放到最近的空位"
+		draw_string_outline(font, Vector2(40, 700), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, 4, Color(0, 0, 0, 0.6))
+		draw_string(font, Vector2(40, 700), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("ffe9b0"))
+	elif is_rest_day:
 		draw_rect(Rect2(20, 200, 860, 508), Color(0.08, 0.05, 0.02, 0.35))
 		var banner := Rect2(290, 410, 320, 60)
 		draw_rect(banner, Color("3b1a12"))
@@ -2121,7 +2205,9 @@ func _draw_kitchen() -> void:
 
 func _draw_hall() -> void:
 	draw_rect(HALL_RECT, Color("c99e6c"))
-	var floor_tex: Texture2D = art.tex("furniture/floor")
+	var floor_tex: Texture2D = art.tex("furniture/floor_%d" % decor_level)  # 装修越好地面越讲究
+	if floor_tex == null:
+		floor_tex = art.tex("furniture/floor")
 	if floor_tex != null:
 		draw_texture_rect(floor_tex, HALL_RECT, true)  # 平铺
 	# 木地板：每块木板深浅略有不同，带木纹和接缝（有地板图时跳过）
@@ -2158,18 +2244,27 @@ func _draw_hall() -> void:
 		draw_rect(Rect2(425, 236, 50, 446), Color("9e2b25"))
 		draw_rect(Rect2(425, 236, 4, 446), Color("d4a640"))
 		draw_rect(Rect2(471, 236, 4, 446), Color("d4a640"))
-	# 收银柜台
+	# 收银柜台：装修到「气派」换雕花描金柜台
+	var counter_tex: Texture2D = art.tex("furniture/counter_%d" % (1 if decor_level >= 2 else 0))
+	if counter_tex != null:
+		var cs := counter_tex.get_size() * (160.0 / counter_tex.get_size().x)
+		draw_texture_rect(counter_tex, Rect2(Vector2(790, 670) - cs / 2.0, cs), false)
+	else:
+		_draw_counter()
+	# 大门
+	draw_rect(Rect2(20, 708, 860, 12), Color("5a3a22"))
+	draw_rect(Rect2(395, 706, 110, 14), Color("2b1d14"))
+	draw_rect(Rect2(410, 684, 80, 20), Color("8c2f39"))
+	draw_string(font, Vector2(437, 699), "迎客", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f3d27a"))
+
+
+func _draw_counter() -> void:
 	draw_rect(Rect2(740, 660, 100, 18), Color("6b4226"))
 	draw_rect(Rect2(740, 660, 100, 4), Color("8b5a2b"))
 	draw_rect(Rect2(752, 664, 28, 10), Color("3b2416"))
 	for k in 5:
 		_disc(Vector2(756 + k * 5, 669), 1.6, Color("d4a640"))
 	draw_string(font, Vector2(796, 675), "柜台", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f3d9a8"))
-	# 大门
-	draw_rect(Rect2(20, 708, 860, 12), Color("5a3a22"))
-	draw_rect(Rect2(395, 706, 110, 14), Color("2b1d14"))
-	draw_rect(Rect2(410, 684, 80, 20), Color("8c2f39"))
-	draw_string(font, Vector2(437, 699), "迎客", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f3d27a"))
 
 
 # ---------------- 休假日的集市 ----------------
@@ -2359,6 +2454,25 @@ func _market_label(center: Vector2, text: String, highlight: bool) -> void:
 	draw_string(title_font, r.position + Vector2(8, 16), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color("ffe9b0"))
 
 
+## 挂在墙上的字画，p 是画轴顶端。
+func _draw_wall_art(id: String, p: Vector2) -> void:
+	var t: Texture2D = art.tex("furniture/" + id)
+	if t != null:
+		var sz := t.get_size() * (62.0 / t.get_size().y)
+		draw_texture_rect(t, Rect2(p - Vector2(sz.x / 2.0, 0), sz), false)
+		return
+	draw_rect(Rect2(p + Vector2(-13, 0), Vector2(26, 60)), Color("efe6d2"))
+	draw_rect(Rect2(p + Vector2(-15, 0), Vector2(30, 4)), Color("5a3a22"))
+	draw_rect(Rect2(p + Vector2(-15, 58), Vector2(30, 4)), Color("5a3a22"))
+
+
+func _is_wall(id: String) -> bool:
+	for it in Data.DECOR_ITEMS:
+		if it.id == id:
+			return it.get("wall", false)
+	return false
+
+
 ## 画一件摆件。art/furniture/<id>.png 存在就用图片。
 func _draw_ornament(id: String, p: Vector2) -> void:
 	_shadow(p + Vector2(0, 14), 16.0)
@@ -2464,24 +2578,30 @@ func _draw_tables() -> void:
 	var wood: Array = [Color("6b4226"), Color("94602f"), Color("b07a45")]
 	if table_level >= 1:
 		wood = [Color("5a1e14"), Color("7a2e1e"), Color("a04a30")]
-	for i in MAX_TABLES:
-		var p: Vector2 = TABLE_SLOTS[i]
-		if i >= tables.size():
-			draw_arc(p, 30.0, 0.0, TAU, 40, Color(1, 1, 1, 0.22), 2.0, true)
-			continue
+	for s in MAX_TABLES:
+		if not table_slot.has(s):
+			draw_arc(TABLE_SLOTS[s], 30.0, 0.0, TAU, 40, Color(1, 1, 1, 0.22), 2.0, true)
+	for i in tables.size():
+		var p: Vector2 = table_pos(i)
+		if drag != null and drag.kind == "table" and drag.i == i:
+			p = get_global_mouse_position()  # 正被拖着
 		var t: Dictionary = tables[i]
 		# 方凳
-		var sp := seat_pos(i) + Vector2(0, 6)
-		var stool_tex: Texture2D = art.tex("furniture/stool")
+		var sp := p + Vector2(-46, 6)
+		var stool_tex: Texture2D = art.tex("furniture/chair_%d" % table_level)  # 桌椅按档次配套
+		if stool_tex == null:
+			stool_tex = art.tex("furniture/stool")
 		if stool_tex != null:
-			draw_texture_rect(stool_tex, Rect2(sp - Vector2(13, 13), Vector2(26, 26)), false)
+			draw_texture_rect(stool_tex, Rect2(sp - Vector2(16, 16), Vector2(32, 32)), false)
 		else:
 			draw_rect(Rect2(sp - Vector2(11, 9), Vector2(22, 18)), wood[0])
 			draw_rect(Rect2(sp - Vector2(10, 8), Vector2(20, 15)), wood[1])
 			draw_rect(Rect2(sp - Vector2(10, 8), Vector2(20, 3)), wood[2])
 		# 桌子
 		_shadow(p + Vector2(0, 14), 33.0)
-		var table_tex: Texture2D = art.tex("furniture/table")
+		var table_tex: Texture2D = art.tex("furniture/table_%d" % table_level)
+		if table_tex == null:
+			table_tex = art.tex("furniture/table")
 		if table_tex != null:
 			draw_texture_rect(table_tex, Rect2(p - Vector2(34, 34), Vector2(68, 68)), false)
 		else:  # 圆桌：桌沿、桌面、木纹、高光；档次越高颜色越深，雕花桌带金边和花纹
@@ -2529,7 +2649,13 @@ func _draw_tables() -> void:
 
 
 func _draw_decor() -> void:
-	if decor_level >= 1:  # 红灯笼
+	var lantern: Texture2D = art.tex("furniture/palace_lantern" if decor_level >= 3 else "furniture/lantern")
+	var bonsai: Texture2D = art.tex("furniture/bonsai")
+	if decor_level >= 1 and lantern != null:  # 灯笼，富丽堂皇换宫灯
+		for p in [Vector2(36, 280), Vector2(36, 470), Vector2(864, 280), Vector2(864, 470)]:
+			var ls := lantern.get_size() * (44.0 / lantern.get_size().y)
+			draw_texture_rect(lantern, Rect2(p - ls / 2.0, ls), false)
+	elif decor_level >= 1:  # 红灯笼
 		for p in [Vector2(36, 280), Vector2(36, 470), Vector2(864, 280), Vector2(864, 470)]:
 			draw_line(p + Vector2(0, -24), p + Vector2(0, -12), Color("2b1d14"), 2.0)
 			draw_rect(Rect2(p + Vector2(-6, -14), Vector2(12, 4)), Color("d4a640"))
@@ -2537,15 +2663,23 @@ func _draw_decor() -> void:
 			_disc(p + Vector2(-3, -3), 4.0, Color(1, 0.65, 0.45, 0.5))
 			draw_rect(Rect2(p + Vector2(-6, 10), Vector2(12, 4)), Color("d4a640"))
 			draw_line(p + Vector2(0, 14), p + Vector2(0, 24), Color("e0b84a"), 2.0)
-	if decor_level >= 2:  # 盆栽
+	if decor_level >= 2 and bonsai != null:
+		for p in [Vector2(48, 222), Vector2(852, 222), Vector2(864, 640)]:
+			draw_texture_rect(bonsai, Rect2(p - Vector2(18, 24), Vector2(36, 36)), false)
+	elif decor_level >= 2:  # 盆栽
 		for p in [Vector2(48, 222), Vector2(852, 222), Vector2(864, 640)]:
 			draw_rect(Rect2(p + Vector2(-11, 2), Vector2(22, 16)), Color("8b4a2b"))
 			_disc(p + Vector2(-6, -4), 9.0, Color("3f7d3a"))
 			_disc(p + Vector2(6, -4), 9.0, Color("4f9447"))
 			_disc(p + Vector2(0, -12), 9.0, Color("5aa852"))
 	# 摆件
+	var mouse := get_global_mouse_position()
 	for id in ornaments:
-		_draw_ornament(id, DECOR_SLOTS[int(ornaments[id])])
+		var dragging: bool = drag != null and drag.kind == "orn" and drag.id == id
+		if _is_wall(id):
+			_draw_wall_art(id, mouse - Vector2(0, 30) if dragging else WALL_SLOTS[int(ornaments[id])])
+		else:
+			_draw_ornament(id, mouse if dragging else DECOR_SLOTS[int(ornaments[id])])
 	# 牌匾
 	var plaque := Rect2(370, 64, 160, 28)
 	draw_rect(plaque, Color("3b1a12"))
@@ -3118,6 +3252,9 @@ func _build_shop_tab() -> Control:
 	var list := VBoxContainer.new()
 	list.add_theme_constant_override("separation", 6)
 	list.add_child(_hint("店面的活儿都归木工坊，只有休假日能做。装修、桌椅、灶台、摆件都会直接显示在大堂里。"))
+	btn_arrange = _button("", _toggle_arrange)
+	btn_arrange.custom_minimum_size = Vector2(0, 38)
+	list.add_child(btn_arrange)
 
 	list.add_child(_section("桌位"))
 	lbl_tables = _label("", 14)
@@ -3315,7 +3452,9 @@ func _refresh_ui() -> void:
 	var slot_names := ["左墙上", "右墙上", "左墙下", "右墙下", "门口左", "门口右"]
 	for row in ornament_rows:
 		var owned: bool = ornaments.has(row.id)
-		row.state.text = ("摆在%s" % slot_names[int(ornaments[row.id])]) if owned else "还没买"
+		var wall := _is_wall(row.id)
+		var where: String = ("隔墙第 %d 位" % (int(ornaments[row.id]) + 1)) if wall and owned else (slot_names[int(ornaments[row.id])] if owned else "")
+		row.state.text = ("摆在%s" % where) if owned else "还没买"
 		row.move.visible = owned
 		row.move.disabled = not is_rest_day
 		row.buy.visible = not owned
@@ -3323,7 +3462,7 @@ func _refresh_ui() -> void:
 		for it in Data.DECOR_ITEMS:
 			if it.id == row.id:
 				cost = int(it.cost)
-		row.buy.disabled = not is_rest_day or money < cost or _free_slot() < 0
+		row.buy.disabled = not is_rest_day or money < cost or _free_slot(-1, wall) < 0
 	var target_ok: bool = selected_staff != null and is_instance_valid(selected_staff)
 	lbl_item_target.text = ("买给：%s（在「伙计」里选人）" % selected_staff.info.name) if target_ok else "先在「伙计」里选中一个伙计，再给他买道具。"
 	for k in item_buttons.size():
@@ -3346,6 +3485,8 @@ func _refresh_ui() -> void:
 		lbl_contest.text = ""
 	var reason := _contest_block_reason()
 	lbl_rivals.text = _rivals_text()
+	btn_arrange.visible = is_rest_day
+	btn_arrange.text = "布置好了，回集市" if arranging else "进店布置（拖动桌子、摆件、字画）"
 	btn_contest.text = "报名参加下一场" if reason == "" else reason
 	btn_contest.disabled = reason != ""
 	btn_contest.visible = is_rest_day and contest_idx < Data.CONTESTS.size()  # 只在休假日（集市告示牌）报名
@@ -3549,9 +3690,15 @@ func _autotest_rest_day() -> void:
 		_buy_decor()
 		_upgrade_tables()
 		_upgrade_stove()
-		for id in ["screen", "fish", "flower", "censer", "curio", "scroll"]:
+		for id in ["screen", "fish", "flower", "censer", "curio", "scroll", "wall_landscape", "wall_tiger"]:
 			_buy_ornament(id)
 		_move_ornament("fish")
+		_toggle_arrange()
+		_drop({"kind": "table", "i": 0}, TABLE_SLOTS[7])
+		_drop({"kind": "orn", "id": "wall_tiger"}, WALL_SLOTS[5])
+		print("[autotest] arrange: table_slot=%s wall_tiger=%s pick=%s" % [table_slot, ornaments.wall_tiger, _pick_at(table_pos(1))])
+		await _shot("arrange")
+		_toggle_arrange()
 		_sign_contest()
 		print("[autotest] rest day 1: staff=%d tables=%d decor=%d research=%s contest=%s money=%d" % [
 			staff.size(), tables.size(), decor_level, research != null, contest_active, money])
@@ -3569,9 +3716,9 @@ func _autotest_rest_day() -> void:
 		await _shot("settings")
 		_toggle_settings()
 		_save_game()
-		var before := "%d|%d|%s|%s|%s|%s|%s" % [money, staff.size(), research.points, str(ornaments), staff[0].info.stats, food, food_price]
+		var before := "%d|%d|%s|%s|%s|%s|%s|%s" % [money, staff.size(), research.points, str(ornaments), staff[0].info.stats, food, food_price, table_slot]
 		_load_game()
-		var after := "%d|%d|%s|%s|%s|%s|%s" % [money, staff.size(), research.points, str(ornaments), staff[0].info.stats, food, food_price]
+		var after := "%d|%d|%s|%s|%s|%s|%s|%s" % [money, staff.size(), research.points, str(ornaments), staff[0].info.stats, food, food_price, table_slot]
 		print("[autotest] save/load roundtrip: ", "same" if before == after else "DIFF %s vs %s" % [before, after])
 		assert(before == after)
 		money += 5000

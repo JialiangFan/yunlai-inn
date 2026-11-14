@@ -61,6 +61,11 @@ const DECOR_ITEMS := [
 	{"id": "flower", "name": "牡丹花架", "cost": 500, "bonus": "arrival", "value": 0.08, "desc": "来客 +8%"},
 	{"id": "curio", "name": "博古架", "cost": 1500, "bonus": "rich", "value": 1.0, "desc": "有钱的商贾更爱来"},
 	{"id": "censer", "name": "铜鼎香炉", "cost": 900, "bonus": "tip", "value": 0.3, "desc": "赏钱 +30%"},
+	# wall：挂在后厨与大堂之间那堵墙上
+	{"id": "wall_landscape", "name": "山水立轴", "cost": 700, "bonus": "sat", "value": 0.02, "desc": "满意度 +2%", "wall": true},
+	{"id": "wall_flower", "name": "花鸟立轴", "cost": 600, "bonus": "arrival", "value": 0.05, "desc": "来客 +5%", "wall": true},
+	{"id": "wall_calligraphy", "name": "书法立轴", "cost": 900, "bonus": "rep", "value": 0.08, "desc": "声望增长 +8%", "wall": true},
+	{"id": "wall_tiger", "name": "猛虎下山图", "cost": 1000, "bonus": "patience", "value": 0.06, "desc": "客人耐心 +6%", "wall": true},
 ]
 
 # ---------------- 食材 ----------------
