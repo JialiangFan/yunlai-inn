@@ -1010,7 +1010,7 @@ func _end_day() -> void:
 	if money < 0:
 		_show_popup("客栈周转不灵", body + "\n\n账上亏空 %d 文，只好把客栈盘了出去……" % -money, "重新开始", _restart)
 	elif weekday() == 5:
-		_show_popup("%s打烊" % _date_text(), body, "进入休假日", _enter_rest_day)
+		_enter_rest_day(body)  # 一周打完烊，直接进集市
 	else:
 		_show_popup("%s打烊" % _date_text(), body, "明天接着开张", _start_next_day)
 
@@ -1064,7 +1064,7 @@ func _start_next_day() -> void:
 	queue_redraw()
 
 
-func _enter_rest_day() -> void:
+func _enter_rest_day(week_summary := "") -> void:
 	day += 1
 	is_rest_day = true
 	day_over = false
@@ -1096,18 +1096,22 @@ func _enter_rest_day() -> void:
 	if restock != "":
 		notes.append(restock)
 	chars_layer.visible = false  # 休假日画集市街景，大堂里的人先藏起来
-	var title := "%s" % _date_text()
+	var title := "第 %d 周结束，进集市" % week()
 	var result := ""
 	if contest_active and contest_days >= 6:
 		result = _finish_contest()
 	if game_finished:
 		_show_popup("名扬天下！", result + "\n\n云来客栈从城南小店一路比到天下名厨大会，如今名扬四海，门前车水马龙。\n掌柜的，恭喜！（可以继续经营）", "继续经营", _after_rest_popup)
 	else:
-		var body := "今天歇业，掌柜的去逛集市。点街上的铺子就能办事：\n· 粮行：进食材、设自动补货\n· 人力市场：本周有新的应征者\n· 木工坊：添桌、装修、桌椅、灶台、摆件\n· 杂货铺：给伙计买道具\n· 街口告示牌：报名比赛\n\n办完事点街尾的「回店开张」，第二天照常营业。"
+		var body := "办完事点街尾的「回店开张」，开始新的一周。"
+		if week() == 1:
+			body = "今天歇业，掌柜的去逛集市。点街上的铺子就能办事：\n· 粮行：进食材、设自动补货\n· 人力市场：本周有新的应征者\n· 木工坊：添桌、装修、桌椅、灶台、摆件\n· 杂货铺：给伙计买道具\n· 街口告示牌：报名比赛\n\n" + body
 		if result != "":
 			body = result + "\n\n" + body
 		if not notes.is_empty():
 			body = "\n".join(notes) + "\n\n" + body
+		if week_summary != "":
+			body = "【周六账目】\n" + week_summary + "\n\n" + body
 		_show_popup(title, body, "逛集市", _after_rest_popup)
 	_rebuild_staff_list()
 	_refresh_ui()
@@ -3009,7 +3013,7 @@ func _refresh_ui() -> void:
 	var reason := _contest_block_reason()
 	btn_contest.text = "报名参加下一场" if reason == "" else reason
 	btn_contest.disabled = reason != ""
-	btn_contest.visible = contest_idx < Data.CONTESTS.size()
+	btn_contest.visible = is_rest_day and contest_idx < Data.CONTESTS.size()  # 只在休假日（集市告示牌）报名
 
 
 func _toggle_settings() -> void:
@@ -3165,7 +3169,7 @@ func _autotest_popup(title: String) -> void:
 		return
 	if title == "说书先生来访":
 		await _shot("event")
-	elif title.contains("周六打烊") and day == 6:
+	elif title.contains("周结束") and day == 7:
 		await _shot("week1_summary")
 	elif title == "名扬天下！":
 		await _shot("ending")
