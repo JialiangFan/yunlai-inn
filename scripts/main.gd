@@ -62,7 +62,7 @@ const STAFF_COLORS := {
 
 const TASK_PRIORITY := {"deliver": 0, "order": 1, "clean": 2}
 
-const INTRO_TEXT := "你在城南盘下了一间小客栈，手下有一个掌柜、一个厨师、一个跑堂。\n\n每周营业六天，伙计们自己干活，你看着大堂、应付上门的访客；第七天是休假日，可以进城：粮行进货、人力市场招人、木工坊添桌装修、杂货铺给伙计买东西，还能报名参加厨艺比赛。\n\n伙计各有能力：厨艺、计算、技巧、反应决定干活快慢，魅力招揽客人，毅力低的会偷懒，向心力低的会辞工。\n\n一路赢下五场比赛，云来客栈就能名扬天下！\n\n快捷键：空格 暂停/继续，1 / 2 / 3 切换速度"
+const INTRO_TEXT := "【第一章 · 重振祖业】\n父亲走得急，只给你留下城南这间旧客栈，还有一个掌柜、一个厨师、一个跑堂。对街的福满楼正等着看笑话。\n本章目标：声望达到 30。\n\n每周营业六天，伙计们自己干活，你看着大堂、应付上门的访客；第七天是休假日，可以进城：粮行进货、人力市场招人、木工坊添桌装修、杂货铺给伙计买东西，还能报名参加厨艺比赛。\n\n伙计各有能力：厨艺、计算、技巧、反应决定干活快慢，魅力招揽客人，毅力低的会偷懒，向心力低的会辞工。\n\n一路赢下五场比赛，云来客栈就能名扬天下！\n\n快捷键：空格 暂停/继续，1 / 2 / 3 切换速度"
 
 # ---------------- 场景布局 ----------------
 const KITCHEN_RECT := Rect2(20, 70, 860, 110)
@@ -153,7 +153,9 @@ var festival_today := ""  # 今天是什么节，空就是平常日子
 # 剧情：对门的醉仙楼
 var story_step := 0  # 下一段剧情在 Data.STORY 里的序号
 var story_wait_week := 0  # 擂台没赢的话，过几周再来
-var rival_on := false  # 醉仙楼开着，来客少一成
+var rivals: Array = []  # 同行的现状：{"rep", "price", "open", "closed", "weak"}，对应 Data.RIVALS
+var chapter := 0  # 主线进行到第几章（Data.CHAPTERS 序号）
+var ending_shown := false
 var regular_friend: Array = [0, 0, 0, 0]  # 四位常客的交情，对应 Data.REGULARS
 var regular_today := {}  # 今天来过的常客
 
@@ -200,6 +202,7 @@ var btn_open_shop: Button
 var contest_labels: Array = []
 var lbl_contest: Label
 var btn_contest: Button
+var lbl_rivals: Label
 var lbl_log: RichTextLabel
 var bar_day: ProgressBar
 var dim: ColorRect
@@ -243,6 +246,8 @@ func _ready() -> void:
 	fx_layer.z_index = 10
 	add_child(fx_layer)
 	_init_dishes()
+	for r in Data.RIVALS:
+		rivals.append({"rep": r.rep, "price": r.price, "open": int(r.open_week) == 1, "closed": false, "weak": 0})
 	for k in Data.FOOD_KINDS:
 		food.append(int(k.start))
 		food_price.append(1.0)
@@ -398,7 +403,7 @@ func _next_spawn_interval() -> float:
 		if w.role() == "厨师" or w.role() == "掌柜":
 			charm += w.stat("魅力") / 250.0
 	var rate := (1.0 + reputation / 35.0 + decor_level * 0.15 + charm) * rush * today_arrival * (1.0 + decor_bonus("arrival"))
-	rate *= float(season().arrival) * (1.6 if festival_today != "" else 1.0) * (0.9 if rival_on else 1.0)
+	rate *= float(season().arrival) * (1.6 if festival_today != "" else 1.0) * _rival_mult()
 	rate *= 1.0 + 0.06 * _trait_count("爱吹牛")
 	return randf_range(0.7, 1.3) * 7.0 / rate
 
@@ -1064,7 +1069,8 @@ func _end_day() -> void:
 			stats.income, _food_total(), money, reputation, stats.slacks, staff.size()])
 	_refresh_ui()
 	if money < 0:
-		_show_popup("客栈周转不灵", body + "\n\n账上亏空 %d 文，只好把客栈盘了出去……" % -money, "重新开始", _restart)
+		var e: Dictionary = Data.ENDINGS["annexed" if rivals[1].open else "sold"]
+		_show_popup(e.title, body + "\n\n账上亏空 %d 文。" % -money + e.text, "重新开始", _restart)
 	elif weekday() == 5:
 		_enter_rest_day(body)  # 一周打完烊，直接进集市
 	else:
@@ -1147,6 +1153,17 @@ func _enter_rest_day(week_summary := "") -> void:
 	if week() % Data.WEEKS_PER_SEASON == 0:
 		var ns: Dictionary = Data.SEASONS[season_of_week(week() + 1)]
 		notes.append("下周入%s：%s" % [ns.name, ns.desc])
+		var tax := Data.TAX_BASE + 60 * tables.size() + 200 * decor_level
+		if _regular_at(3, 0):
+			tax /= 2
+		money -= tax
+		notes.append("这一季的税银 %d 文交到了县衙%s。" % [tax, "（赵捕头帮着说情，减了一半）" if _regular_at(3, 0) else ""])
+	if money > 0 and randf() < Data.THEFT_CHANCE * pow(0.5, staff_of("杂役").size()):
+		var lost := int(money * randf_range(0.1, 0.2))
+		money -= lost
+		notes.append("夜里遭了贼，柜上丢了 %d 文！（杂役守夜能防贼）" % lost)
+		_log("夜里遭贼，丢了 %d 文。" % lost)
+	notes.append_array(_update_rivals())
 	_refresh_market()
 	_roll_food_prices()
 	var restock := _auto_restock()
@@ -1157,8 +1174,13 @@ func _enter_rest_day(week_summary := "") -> void:
 	var result := ""
 	if contest_active and contest_days >= 6:
 		result = _finish_contest()
-	if game_finished:
-		_show_popup("名扬天下！", result + "\n\n云来客栈从城南小店一路比到天下名厨大会，如今名扬四海，门前车水马龙。\n掌柜的，恭喜！（可以继续经营）", "继续经营", _after_rest_popup)
+	var ending := ""
+	if not ending_shown and (game_finished or week() >= Data.FINAL_WEEK):
+		ending = _ending()
+	if ending != "":
+		ending_shown = true
+		var e: Dictionary = Data.ENDINGS[ending]
+		_show_popup(e.title, (result + "\n\n" if result != "" else "") + e.text + "\n\n（可以继续经营）", "继续经营", _after_rest_popup)
 	else:
 		var body := "办完事点街尾的「回店开张」，开始新的一周。"
 		if week() == 1:
@@ -1181,7 +1203,7 @@ func _enter_rest_day(week_summary := "") -> void:
 
 const SAVE_VARS := ["money", "food", "food_price", "reputation", "day", "decor_level", "table_level", "stove_level",
 	"auto_food_on", "auto_food_target", "contest_idx", "contest_active", "contest_days", "contest_value",
-	"contest_sat_sum", "contest_sat_n", "scholar_loan", "game_finished", "story_step", "story_wait_week", "rival_on", "regular_friend"]
+	"contest_sat_sum", "contest_sat_n", "scholar_loan", "game_finished", "story_step", "story_wait_week", "regular_friend", "rivals", "chapter", "ending_shown"]
 
 
 func _save_path() -> String:
@@ -1208,7 +1230,8 @@ func _load_game() -> void:
 		_show_popup("云来客栈", "存档坏了，读不出来，只能重新开张。", "开张营业", _start_game)
 		return
 	for k in SAVE_VARS:
-		set(k, type_convert(s[k], typeof(get(k))))
+		if s.has(k):  # 老存档里没有的新字段，保持开局值
+			set(k, type_convert(s[k], typeof(get(k))))
 	food = food.map(func(v): return int(v))
 	auto_food_target = auto_food_target.map(func(v): return int(v))
 	tables.clear()
@@ -1249,6 +1272,18 @@ func _load_game() -> void:
 
 
 func _after_rest_popup() -> void:
+	if chapter < Data.CHAPTERS.size() and _chapter_done(chapter):
+		var done: Dictionary = Data.CHAPTERS[chapter]
+		chapter += 1
+		var text := "「%s」目标达成：%s。" % [done.title, done.goal]
+		var title := "本章完成"
+		if chapter < Data.CHAPTERS.size():
+			var nx: Dictionary = Data.CHAPTERS[chapter]
+			title = nx.title
+			text += "\n\n" + nx.text + "\n\n本章目标：" + nx.goal
+		_log("%s完成。" % done.title)
+		_show_popup(title, text, "继续", _after_rest_popup)
+		return
 	if _story_due():
 		var ev: Dictionary = Data.STORY[story_step]
 		story_step += 1
@@ -1261,6 +1296,93 @@ func _after_rest_popup() -> void:
 	tabs.current_tab = 2
 	if autotest:
 		_autotest_rest_day()
+
+
+# ---------------- 主线与结局 ----------------
+
+func _chapter_done(i: int) -> bool:
+	match i:
+		0:
+			return reputation >= 30.0
+		1:
+			return contest_idx >= 2 and rivals[1].closed
+		2:
+			return contest_idx >= Data.CONTESTS.size()
+	return false
+
+
+## 该看哪个结局（Data.ENDINGS 的键）。破产的结局在 _end_day 里另算。
+func _ending() -> String:
+	if game_finished:
+		for r in rivals:
+			if not r.closed:
+				return "famous"
+		return "overlord"
+	return "keeper" if money > 0 and reputation >= 50.0 else "plain"
+
+
+# ---------------- 同行 ----------------
+
+func _avg_price_ratio() -> float:
+	var sum := 0.0
+	var n := 0
+	for d in dishes:
+		if d.unlocked:
+			sum += float(d.ratio)
+			n += 1
+	return sum / n if n > 0 else 1.0
+
+
+## 同行抢客：每家开着的同行按它和你的声望比、菜价比，分走一些客人。
+func _rival_mult() -> float:
+	var my_price := _avg_price_ratio()
+	var m := 1.0
+	for r in rivals:
+		if r.open:
+			var p := 0.12 * clampf(float(r.rep) / maxf(reputation, 5.0), 0.3, 1.5) * clampf(my_price / float(r.price), 0.6, 1.6)
+			m *= 1.0 - clampf(p, 0.0, 0.3)
+	return m
+
+
+## 每个休假日同行动一动：开张、涨声望、打价格战、撑不住关门。返回要告诉玩家的消息。
+func _update_rivals() -> PackedStringArray:
+	var notes := PackedStringArray()
+	for i in rivals.size():
+		var d: Dictionary = Data.RIVALS[i]
+		var r: Dictionary = rivals[i]
+		if not r.open:
+			if not r.closed and int(d.open_week) == week() + 1:
+				r.open = true
+				notes.append("对街新开了一家%s：%s" % [d.name, d.desc])
+			continue
+		r.rep = minf(100.0, float(r.rep) + float(d.grow) * randf_range(0.5, 1.5) + (1.0 if float(r.rep) < reputation else 0.0))
+		if reputation > float(r.rep) + 5.0 and float(r.price) > 0.75:
+			r.price = snappedf(float(r.price) - 0.05, 0.05)
+			notes.append("%s降价了（菜价 ×%.2f），想把客人抢回去。" % [d.name, r.price])
+		elif reputation < float(r.rep) and float(r.price) < float(d.price):
+			r.price = snappedf(float(r.price) + 0.05, 0.05)
+		r.weak = int(r.weak) + 1 if float(r.rep) < reputation * 0.45 else 0
+		if int(r.weak) >= 3:
+			r.open = false
+			r.closed = true
+			_change_rep(3.0)
+			notes.append("%s生意被你抢光，撑不下去关门了！（声望 +3）" % d.name)
+			_log("%s关门了。" % d.name)
+	return notes
+
+
+func _rivals_text() -> String:
+	var lines := PackedStringArray()
+	if chapter < Data.CHAPTERS.size():
+		lines.append("%s —— 目标：%s" % [Data.CHAPTERS[chapter].title, Data.CHAPTERS[chapter].goal])
+	lines.append("城南酒楼：云来客栈 声望 %d、菜价 ×%.2f" % [int(reputation), _avg_price_ratio()])
+	for i in rivals.size():
+		var r: Dictionary = rivals[i]
+		if r.open:
+			lines.append("　%s 声望 %d、菜价 ×%.2f" % [Data.RIVALS[i].name, int(r.rep), float(r.price)])
+		elif r.closed:
+			lines.append("　%s 已关门" % Data.RIVALS[i].name)
+	return "\n".join(lines)
 
 
 # ---------------- 常客 ----------------
@@ -1297,6 +1419,8 @@ func _regular_up(ri: int) -> void:
 # ---------------- 剧情 ----------------
 
 func _story_due() -> bool:
+	if story_step > 0 and rivals[1].closed:
+		story_step = Data.STORY.size()  # 醉仙楼已经关门，后面的戏不用唱了
 	if game_finished or story_step >= Data.STORY.size():
 		return false
 	return week() >= maxi(int(Data.STORY[story_step].week), story_wait_week)
@@ -1329,7 +1453,7 @@ func _story_effect(ev: Dictionary, yes: bool) -> String:
 	var best = _best_cook()
 	match ev.id:
 		"rival_open":
-			rival_on = true
+			rivals[1].open = true
 			return "醉仙楼开张了。往后得打起精神，别让人比下去。"
 		"rival_poach":
 			if best == null:
@@ -1352,7 +1476,8 @@ func _story_effect(ev: Dictionary, yes: bool) -> String:
 		"rival_duel":
 			if yes and best != null and randf() < best.stat("厨艺") / 110.0:
 				money += cost * 2
-				rival_on = false
+				rivals[1].open = false
+				rivals[1].closed = true
 				_change_rep(8.0)
 				return "%s在擂台上一道菜惊艳四座，赢回 %d 文！\n醉仙楼没脸再开，钱东家关门回乡了。" % [best.info.name, cost * 2]
 			story_step -= 1  # 过四周再下战书
@@ -1722,6 +1847,11 @@ func _trigger_random_event() -> void:
 		if ev.id == "scholar" and scholar_loan:
 			continue
 		options.append(ev)
+	if randf() < 0.4:  # 官府与天灾
+		options.clear()
+		for ev in Data.DISASTERS:
+			if not ev.has("season") or int(ev.season) == season_of_week(week()):
+				options.append(ev)
 	_trigger_event(options.pick_random())
 
 
@@ -1763,6 +1893,20 @@ func _event_accept(ev: Dictionary) -> void:
 				w.info.stats["向心力"] = mini(99, w.stat("向心力") + 10)
 				w.info.stats["毅力"] = mini(99, w.stat("毅力") + 6)
 			_log("伙计们喝了药茶，精神抖擞。")
+		"inspect":
+			_log("差役收了茶钱，随便看了两眼就走了。")
+		"fire":
+			if not staff_of("杂役").is_empty() or randf() < 0.5:
+				food[0] = maxi(0, food[0] - 30)
+				_log("火扑灭了，只烧了些柴米。")
+			else:
+				money -= 400
+				today_arrival *= 0.5
+				_change_rep(-2.0)
+				_log("火势太大，灶台烧坏了，修灶花了 400 文，客人也吓跑了一半。（有杂役能更快扑灭）")
+		"snow":
+			today_arrival *= 0.4
+			_log("大雪封路，今天客人少得很。")
 		"master_chef":
 			var info := _make_staff("厨师", randi_range(78, 92), 70)
 			_add_staff(info, false)
@@ -1771,7 +1915,17 @@ func _event_accept(ev: Dictionary) -> void:
 
 
 func _event_decline(ev: Dictionary) -> void:
-	if ev.id == "bully" and _regular_at(3, 0):
+	if ev.id == "inspect":
+		if _regular_at(3, 1):
+			_log("赵捕头打过招呼，差役转了一圈就走了。")
+		elif randf() < 0.4 + 0.15 * decor_level + 0.1 * staff_of("杂役").size():
+			_change_rep(2.0)
+			_log("后厨查得干干净净，差役当众夸了两句。（声望 +2）")
+		else:
+			money -= 500
+			_change_rep(-3.0)
+			_log("差役说后厨脏乱，罚了 500 文。（装修好、杂役多更容易过关）")
+	elif ev.id == "bully" and _regular_at(3, 0):
 		_log("地痞一听赵捕头的名字，灰溜溜地走了。")
 	elif ev.id == "bully" and randf() < 0.6:
 		var scared := 0
@@ -2949,6 +3103,8 @@ func _build_shop_tab() -> Control:
 func _build_contest_tab() -> Control:
 	var list := VBoxContainer.new()
 	list.add_theme_constant_override("separation", 6)
+	lbl_rivals = _wrap(_label("", 13, Color("5a4030")))
+	list.add_child(lbl_rivals)
 	list.add_child(_hint("比赛要依次参加。休假日报名，下一周六个营业日比成绩，达到目标就赢。没赢可以再报。"))
 	for i in Data.CONTESTS.size():
 		var c: Dictionary = Data.CONTESTS[i]
@@ -3120,6 +3276,7 @@ func _refresh_ui() -> void:
 	else:
 		lbl_contest.text = ""
 	var reason := _contest_block_reason()
+	lbl_rivals.text = _rivals_text()
 	btn_contest.text = "报名参加下一场" if reason == "" else reason
 	btn_contest.disabled = reason != ""
 	btn_contest.visible = is_rest_day and contest_idx < Data.CONTESTS.size()  # 只在休假日（集市告示牌）报名
@@ -3283,7 +3440,7 @@ func _autotest_popup(title: String) -> void:
 		await _shot("event")
 	elif title.contains("周结束") and day == 7:
 		await _shot("week1_summary")
-	elif title == "名扬天下！":
+	elif title.begins_with("结局"):
 		await _shot("ending")
 		print("[autotest] ending shown, contests=%d finished=%s" % [contest_idx, game_finished])
 		print("[autotest] OK")
@@ -3350,10 +3507,16 @@ func _autotest_rest_day() -> void:
 		assert(before == after)
 		money += 5000
 		for ev in Data.STORY:
-			print("[autotest] story %s: %s | rival=%s cooks=%d" % [ev.id, _story_effect(ev, true).replace("\n", " "), rival_on, staff_of("厨师").size()])
+			print("[autotest] story %s: %s | rival=%s cooks=%d" % [ev.id, _story_effect(ev, true).replace("\n", " "), rivals[1].open, staff_of("厨师").size()])
 		story_step = 0
 		story_wait_week = 0
-		rival_on = false
+		rivals[1].open = false
+		rivals[1].closed = false
+		for ev in Data.DISASTERS:
+			_event_accept(ev)
+			_event_decline(ev)
+		print("[autotest] rivals: %s | mult=%.2f | update=%s" % [_rivals_text().replace("\n", " / "), _rival_mult(), _update_rivals()])
+		print("[autotest] chapter0 done=%s ending=%s" % [_chapter_done(0), _ending()])
 		print("[autotest] season w1=%s w5=%s festival_day3=%s" % [season().name, Data.SEASONS[season_of_week(5)].name, Data.FESTIVALS[0].name])
 		for t in [3, 2, 1, 0, 4]:
 			tabs.current_tab = t
