@@ -139,22 +139,22 @@ func _draw() -> void:
 		_draw_hat(o)
 	match state:
 		S.WANT_ORDER:
-			_bubble(o + Vector2(0, -54), "点菜！", Color("c0392b"))
-			_patience_bar(o + Vector2(0, -36))
+			_bubble(o + Vector2(0, -66), "点菜！", Color("c0392b"))
+			_patience_bar(o + Vector2(0, -48))
 		S.WAIT_FOOD:
-			_bubble(o + Vector2(0, -54), dish.name, Color("3b2a1a"))
-			_patience_bar(o + Vector2(0, -36))
+			_bubble(o + Vector2(0, -66), dish.name, Color("3b2a1a"))
+			_patience_bar(o + Vector2(0, -48))
 		S.EATING:
 			var ratio := clampf(1.0 - timer / EAT_TIME, 0.0, 1.0)
-			draw_rect(Rect2(o + Vector2(-14, -36), Vector2(28, 4)), Color(0, 0, 0, 0.45))
-			draw_rect(Rect2(o + Vector2(-14, -36), Vector2(28 * ratio, 4)), Color("8fd16a"))
+			draw_rect(Rect2(o + Vector2(-14, -48), Vector2(28, 4)), Color(0, 0, 0, 0.45))
+			draw_rect(Rect2(o + Vector2(-14, -48), Vector2(28 * ratio, 4)), Color("8fd16a"))
 		S.SELF_PAY:
-			_bubble(o + Vector2(0, -54), "自己算账…", Color("8a7560"))
+			_bubble(o + Vector2(0, -66), "自己算账…", Color("8a7560"))
 		S.TO_COUNTER:
 			disc(o + Vector2(12, -2), 4.0, Color("d4a640"))
 		S.LEAVING:
 			if angry:
-				draw_string(main.font, o + Vector2(-12, -34), "哼！", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color("ff5b4b"))
+				draw_string(main.font, o + Vector2(-12, -46), "哼！", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color("ff5b4b"))
 
 
 func _draw_hat(o: Vector2) -> void:

@@ -27,11 +27,30 @@ const LOW_FOOD := 60  # 某类食材低于这个数就提醒
 const AUTO_FOOD_STEP := 100
 const AUTO_FOOD_MAX := 2000
 
+# 客人身份。fav：最爱的菜系（Data.CATEGORIES 序号），点到爱吃的更满意；rep：声望到了才会上门；say：进门的口头禅。
 const GUEST_TYPES := [
-	{"name": "农夫", "colors": ["6b8e4e", "8a7a4a", "5f8a6a", "9a6a3a"], "budget": [18, 45], "patience": 1.3, "tip": 0.05, "weight": 3.0},
-	{"name": "书生", "colors": ["7fa7c9", "e8e2d0", "6ab0b0", "a8c0e0"], "budget": [30, 80], "patience": 1.15, "tip": 0.1, "weight": 3.0},
-	{"name": "侠客", "colors": ["8c2f39", "2e2e3a", "5a3a7a", "b04a2a"], "budget": [45, 170], "patience": 0.8, "tip": 0.1, "weight": 2.0},
-	{"name": "商贾", "colors": ["c8963e", "d9732a", "a85a8a", "b8a040"], "budget": [90, 320], "patience": 0.9, "tip": 0.2, "weight": 1.0},
+	{"name": "农夫", "colors": ["6b8e4e", "8a7a4a", "5f8a6a", "9a6a3a"], "budget": [18, 45], "patience": 1.3, "tip": 0.05, "weight": 3.0, "fav": 0, "rep": 0,
+		"say": ["掌柜的，来碗面，要大碗的！", "地里活忙，吃完就走。"]},
+	{"name": "书生", "colors": ["7fa7c9", "e8e2d0", "6ab0b0", "a8c0e0"], "budget": [30, 80], "patience": 1.15, "tip": 0.1, "weight": 3.0, "fav": 1, "rep": 0,
+		"say": ["小二，可有清雅些的点心？", "读书读饿了……"]},
+	{"name": "侠客", "colors": ["8c2f39", "2e2e3a", "5a3a7a", "b04a2a"], "budget": [45, 170], "patience": 0.8, "tip": 0.1, "weight": 2.0, "fav": 3, "rep": 0,
+		"say": ["好酒好肉尽管上！", "快些，爷还要赶路。"]},
+	{"name": "商贾", "colors": ["c8963e", "d9732a", "a85a8a", "b8a040"], "budget": [90, 320], "patience": 0.9, "tip": 0.2, "weight": 1.0, "fav": 4, "rep": 0,
+		"say": ["拣贵的上，不差钱。", "谈完这笔买卖，正好吃顿好的。"]},
+	{"name": "镖师", "colors": ["7a5a3a", "5a4a3a"], "budget": [60, 200], "patience": 0.9, "tip": 0.1, "weight": 1.2, "fav": 3, "rep": 10,
+		"say": ["押了三天镖，饿坏了！", "大块的肉，多来几盘！"]},
+	{"name": "道士", "colors": ["6a7a80", "8a9aa0"], "budget": [30, 90], "patience": 1.25, "tip": 0.15, "weight": 0.8, "fav": 5, "rep": 10,
+		"say": ["贫道观你这店，有兴旺之相。", "来碗热汤，暖暖身子。"]},
+	{"name": "和尚", "colors": ["c8a050", "b08a40"], "budget": [20, 60], "patience": 1.4, "tip": 0.0, "weight": 0.8, "fav": 0, "rep": 0,
+		"say": ["阿弥陀佛，来碗素面。", "施主，化个缘可好？"]},
+	{"name": "官差", "colors": ["2e2e2e", "6a2a2a"], "budget": [30, 110], "patience": 0.75, "tip": 0.0, "weight": 1.0, "fav": 2, "rep": 20,
+		"say": ["巡街巡累了，弄两个家常菜。", "快着点，公务在身！"]},
+	{"name": "千金小姐", "colors": ["e8a0b0", "d890c0"], "budget": [100, 280], "patience": 0.85, "tip": 0.3, "weight": 0.7, "fav": 1, "rep": 35,
+		"say": ["听说你家的点心做得精致？", "丫鬟，帮我挑个干净座儿。"]},
+	{"name": "乞丐", "colors": ["8a7a6a", "6a5a4a"], "budget": [6, 24], "patience": 1.6, "tip": 0.0, "weight": 0.6, "fav": 0, "rep": 0,
+		"say": ["掌柜行行好，一碗阳春面就成。", "今儿讨到几文钱，也来下回馆子！"]},
+	{"name": "胡商", "colors": ["3a6aa0", "a04a3a"], "budget": [130, 420], "patience": 0.9, "tip": 0.3, "weight": 0.6, "fav": 4, "rep": 50,
+		"say": ["远道而来，要尝尝中原的鱼！", "银子有的是，好菜尽管上。"]},
 ]
 const SASH_COLORS := ["d33a2c", "e0b84a", "3f7d3a", "2d6ea8", "f2f2e8", "8a3ab0"]
 const STAFF_COLORS := {
@@ -135,6 +154,8 @@ var festival_today := ""  # 今天是什么节，空就是平常日子
 var story_step := 0  # 下一段剧情在 Data.STORY 里的序号
 var story_wait_week := 0  # 擂台没赢的话，过几周再来
 var rival_on := false  # 醉仙楼开着，来客少一成
+var regular_friend: Array = [0, 0, 0, 0]  # 四位常客的交情，对应 Data.REGULARS
+var regular_today := {}  # 今天来过的常客
 
 var chars_layer: Node2D
 var fx_layer: Node2D
@@ -185,6 +206,8 @@ var dim: ColorRect
 var popup: PanelContainer
 var popup_title: Label
 var popup_body: Label
+var popup_portrait: TextureRect  # 访客事件的立绘，art/portraits/<id>.png
+var popup_portrait_key := ""  # 下一个弹窗要配哪张立绘
 var popup_button: Button
 var popup_button2: Button
 var popup_action := Callable()
@@ -376,14 +399,21 @@ func _next_spawn_interval() -> float:
 			charm += w.stat("魅力") / 250.0
 	var rate := (1.0 + reputation / 35.0 + decor_level * 0.15 + charm) * rush * today_arrival * (1.0 + decor_bonus("arrival"))
 	rate *= float(season().arrival) * (1.6 if festival_today != "" else 1.0) * (0.9 if rival_on else 1.0)
+	rate *= 1.0 + 0.06 * _trait_count("爱吹牛")
 	return randf_range(0.7, 1.3) * 7.0 / rate
 
 
 func _try_spawn_customer() -> void:
 	stats.visitors += 1
 	var g: Dictionary = _pick_guest_type()
+	if randf() < 0.05:
+		var ri := randi() % Data.REGULARS.size()
+		if not regular_today.has(ri):
+			regular_today[ri] = true
+			var r: Dictionary = Data.REGULARS[ri]
+			g = {"name": r.name, "colors": r.colors, "budget": r.budget, "patience": 1.3, "tip": 0.15, "fav": r.fav, "say": r.say, "regular": ri}
 	var budget := randi_range(int(g.budget[0]), int(g.budget[1]))
-	var dish = _pick_dish(budget)
+	var dish = _pick_dish(budget, int(g.fav))
 	var text_pos := DOOR_POS + Vector2(randf_range(-150, 150), randf_range(-95, -70))
 	if dish == null:
 		stats.lost_price += 1
@@ -404,6 +434,8 @@ func _try_spawn_customer() -> void:
 	c.setup(g, dish, ti)
 	customers.append(c)
 	sfx.play("bell", -8.0)
+	if randf() < 0.35 or g.has("regular"):
+		_float_text(text_pos, "%s：%s" % [g.name, g.say.pick_random()], Color("fff3d6"))
 	if not staff_of("跑堂").is_empty():
 		sfx.voice("welcome", 0.6)
 
@@ -411,20 +443,21 @@ func _try_spawn_customer() -> void:
 func _pick_guest_type() -> Dictionary:
 	var weights: Array = []
 	for g in GUEST_TYPES:
-		var w: float = g.weight
-		if g.name == "商贾":
+		var w: float = g.weight if reputation >= float(g.rep) else 0.0
+		if g.name == "商贾" or g.name == "胡商" or g.name == "千金小姐":
+			w += 1.5 if _regular_at(0, 0) else 0.0  # 王员外领来的朋友
 			w += reputation / 25.0 + decor_bonus("rich")  # 名气越大，有钱的客人越多
 		weights.append(w)
 	return GUEST_TYPES[_weighted_index(weights)]
 
 
-func _pick_dish(budget: int):
+func _pick_dish(budget: int, fav := -1):
 	var options: Array = []
 	var weights: Array = []
 	for d in dishes:
 		if d.unlocked and price_of(d) <= budget and food[d.food] >= int(d.cost):
 			options.append(d)
-			weights.append((float(d.taste) + 1.0) * (2.0 if int(d.cat) == int(season().fav) else 1.0))
+			weights.append((float(d.taste) + 1.0) * (2.0 if int(d.cat) == int(season().fav) else 1.0) * (3.0 if int(d.cat) == fav else 1.0))
 	if options.is_empty():
 		return null
 	return options[_weighted_index(weights)]
@@ -459,7 +492,8 @@ func patience_decay() -> float:
 	var help := 0.0
 	for w in staff_of("杂役"):
 		help += (w.stat("反应") * 0.4 + w.stat("魅力") * 0.15) / 100.0
-	return clampf(1.0 - help * 0.6, 0.45, 1.0) * today_patience / (1.0 + decor_level * 0.1 + decor_bonus("patience"))
+	var school := 0.9 if _regular_at(2, 1) else 1.0  # 周夫子在大堂教书
+	return clampf(1.0 - help * 0.6, 0.45, 1.0) * today_patience * school / (1.0 + decor_level * 0.1 + decor_bonus("patience"))
 
 
 # ---------------- 位置与走道 ----------------
@@ -530,7 +564,8 @@ func _make_staff(role: String, skill: int, loyalty: int) -> Dictionary:
 	st[Data.ROLE_STAT[role]] = skill
 	st["向心力"] = loyalty
 	var info := {"name": _random_name(), "role": role, "stats": st, "wage": 0,
-		"color": STAFF_COLORS[role].pick_random(), "sash": SASH_COLORS.pick_random()}
+		"color": STAFF_COLORS[role].pick_random(), "sash": SASH_COLORS.pick_random(),
+		"look": randi() % 3, "trait": Data.TRAITS.pick_random().name}  # look：长相（第几套图）
 	info["wage"] = fair_wage(info)
 	return info
 
@@ -559,7 +594,16 @@ func fair_wage(info: Dictionary) -> int:
 	var best := 0
 	for s in Data.SKILL_STATS:
 		best = maxi(best, int(st[s]))
-	return 30 + int((best + int(st["魅力"])) / 3.0)
+	var wage := 30 + int((best + int(st["魅力"])) / 3.0)
+	return int(wage * 0.9) if info.get("trait", "") == "抠门" else wage
+
+
+func _trait_count(t: String) -> int:
+	var n := 0
+	for w in staff:
+		if w.info.get("trait", "") == t:
+			n += 1
+	return n
 
 
 func _add_staff(info: Dictionary, starting: bool) -> void:
@@ -854,6 +898,9 @@ func customer_paid(c) -> void:
 	var wait_frac: float = clampf(c.strain / c.total_patience, 0.0, 1.0)
 	var s: float = 0.62 + float(d.taste) * 0.07 + decor_level * 0.05 + _waiter_charm_bonus() - wait_frac * 0.45
 	s += float(Data.TABLE_GRADES[table_level].sat) + decor_bonus("sat")
+	if int(d.cat) == int(c.gtype.fav):
+		s += 0.08  # 吃到最爱的菜系
+	s += 0.04 * _trait_count("嘴甜") - 0.02 * _trait_count("爱吹牛")
 	if ratio > 1.0:
 		s -= (ratio - 1.0) * 0.8
 	else:
@@ -903,6 +950,8 @@ func customer_paid(c) -> void:
 		txt += "（赏%d）" % tip
 	_float_text(c.position + Vector2(0, -50), txt, Color("ffd34d"))
 	_float_text(c.position + Vector2(0, -72), word, Color.WHITE)
+	if c.gtype.has("regular") and s >= 0.55:
+		_regular_up(int(c.gtype.regular))
 
 
 func customer_left_table(c, angry: bool) -> void:
@@ -982,6 +1031,13 @@ func _end_day() -> void:
 		if lost > 0:
 			food[k] -= lost
 			spoiled.append("%s %d" % [Data.FOOD_KINDS[k].name, lost])
+	for w in staff:
+		if w.info.get("trait", "") == "贪吃":
+			var k := randi() % food.size()
+			var eaten := mini(food[k], randi_range(8, 20))
+			if eaten > 0:
+				food[k] -= eaten
+				spoiled.append("%s偷吃 %s %d" % [w.info.name, Data.FOOD_KINDS[k].name, eaten])
 	if contest_active:
 		contest_days += 1
 	var earned: int = stats.income - wages - RENT - stats.food_bought
@@ -1053,6 +1109,7 @@ func _start_next_day() -> void:
 	today_arrival = 1.0
 	critic_today = false
 	festival_today = _festival_name()
+	regular_today.clear()
 	_reset_day_stats()
 	_schedule_event()
 	sfx.play("gong", -4.0)
@@ -1124,7 +1181,7 @@ func _enter_rest_day(week_summary := "") -> void:
 
 const SAVE_VARS := ["money", "food", "food_price", "reputation", "day", "decor_level", "table_level", "stove_level",
 	"auto_food_on", "auto_food_target", "contest_idx", "contest_active", "contest_days", "contest_value",
-	"contest_sat_sum", "contest_sat_n", "scholar_loan", "game_finished", "story_step", "story_wait_week", "rival_on"]
+	"contest_sat_sum", "contest_sat_n", "scholar_loan", "game_finished", "story_step", "story_wait_week", "rival_on", "regular_friend"]
 
 
 func _save_path() -> String:
@@ -1198,11 +1255,43 @@ func _after_rest_popup() -> void:
 		var text: String = ev.text
 		if text.contains("%d"):
 			text = text % int(ev.cost)
+		popup_portrait_key = "portraits/rival_boss"
 		_show_popup(ev.title, text, ev.yes, _story_choice.bind(ev, true), ev.no, _story_choice.bind(ev, false))
 		return
 	tabs.current_tab = 2
 	if autotest:
 		_autotest_rest_day()
+
+
+# ---------------- 常客 ----------------
+
+## 第 ri 位常客的交情到没到第 step 档（Data.REGULAR_STEPS）。
+func _regular_at(ri: int, step: int) -> bool:
+	return int(regular_friend[ri]) >= int(Data.REGULAR_STEPS[step])
+
+
+func _regular_up(ri: int) -> void:
+	regular_friend[ri] = int(regular_friend[ri]) + 1
+	var r: Dictionary = Data.REGULARS[ri]
+	var step: int = Data.REGULAR_STEPS.find(int(regular_friend[ri]))
+	if step < 0:
+		return
+	var text: String = Data.REGULAR_STORY[r.id][step]
+	match [r.id, step]:
+		["wang", 1]:
+			money += 1500
+		["liu", 1]:
+			food[1] += 300
+		["zhou", 0]:
+			_change_rep(6.0)
+		["zhao", 1]:
+			_change_rep(8.0)
+	_log("和%s的交情更深了。" % r.name)
+	if popup.visible:  # 正有别的弹窗，就只记进日志
+		_log(text.replace("\n", ""))
+		return
+	popup_portrait_key = "guests/" + r.id
+	_show_popup("老主顾 · %s" % r.name, text, "好", Callable())
 
 
 # ---------------- 剧情 ----------------
@@ -1318,7 +1407,8 @@ func _roll_food_prices() -> void:
 
 ## 食材价格倍率：本周行情 × 季节倾向。
 func _food_mult(k: int) -> float:
-	return float(food_price[k]) * float(season().price[k])
+	var liu := 0.85 if k == 1 and _regular_at(1, 0) else 1.0  # 柳三娘让价
+	return float(food_price[k]) * float(season().price[k]) * liu
 
 
 func _food_cost(k: int, amount: int) -> int:
@@ -1641,6 +1731,7 @@ func _trigger_event(ev: Dictionary) -> void:
 	if text.contains("%d"):
 		text = text % cost
 	popup_event = ev.id
+	popup_portrait_key = "portraits/" + ev.id
 	_show_popup(ev.title, text, ev.yes, _event_accept.bind(ev), ev.no, _event_decline.bind(ev))
 
 
@@ -1680,7 +1771,9 @@ func _event_accept(ev: Dictionary) -> void:
 
 
 func _event_decline(ev: Dictionary) -> void:
-	if ev.id == "bully" and randf() < 0.6:
+	if ev.id == "bully" and _regular_at(3, 0):
+		_log("地痞一听赵捕头的名字，灰溜溜地走了。")
+	elif ev.id == "bully" and randf() < 0.6:
 		var scared := 0
 		for c in customers.duplicate():
 			if is_instance_valid(c) and c.is_waiting():
@@ -2194,7 +2287,7 @@ func _draw_tables() -> void:
 			var pp := p + Vector2(-8, -2)
 			var dish_tex: Texture2D = null if t.dirty else art.dish(t.dish_name)
 			if dish_tex != null:
-				draw_texture_rect(dish_tex, Rect2(pp - Vector2(12, 12), Vector2(24, 24)), false)
+				draw_texture_rect(dish_tex, Rect2(pp - Vector2(15, 15), Vector2(30, 30)), false)
 			else:
 				_disc(pp, 10.0, Color("f8f4ea"))
 				if t.dirty:
@@ -2595,8 +2688,16 @@ func _build_ui() -> void:
 	var pv := VBoxContainer.new()
 	pv.add_theme_constant_override("separation", 16)
 	body_margin.add_child(pv)
+	var pbox := HBoxContainer.new()
+	pbox.add_theme_constant_override("separation", 16)
+	pv.add_child(pbox)
+	popup_portrait = TextureRect.new()
+	popup_portrait.custom_minimum_size = Vector2(160, 213)
+	popup_portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	popup_portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	pbox.add_child(popup_portrait)
 	popup_body = _wrap(_label("", 16), 480.0)
-	pv.add_child(popup_body)
+	pbox.add_child(popup_body)
 	var pb := HBoxContainer.new()
 	pb.alignment = BoxContainer.ALIGNMENT_CENTER
 	pb.add_theme_constant_override("separation", 20)
@@ -2685,6 +2786,14 @@ func _rebuild_staff_list() -> void:
 		head.add_child(_title_label(w.info.name, 19, Color("3b2a1a")))
 		var role_lbl := _label("", 14, Color(Data.ROLE_COLOR[w.role()]))
 		head.add_child(role_lbl)
+		var tr: String = w.info.get("trait", "")
+		if tr != "":
+			var tr_lbl := _label("　「%s」" % tr, 13, Color("8c2f39"))
+			for t in Data.TRAITS:
+				if t.name == tr:
+					tr_lbl.tooltip_text = t.desc
+					tr_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
+			head.add_child(tr_lbl)
 		head.add_child(_spacer())
 		var wage_lbl := _label("", 13, Color("8a7560"))
 		head.add_child(wage_lbl)
@@ -3096,6 +3205,9 @@ func _set_speed(s: float) -> void:
 func _show_popup(title: String, body: String, button_text: String, action: Callable, button2_text := "", action2 := Callable()) -> void:
 	popup_title.text = title
 	popup_body.text = body
+	popup_portrait.texture = art.tex(popup_portrait_key) if popup_portrait_key != "" else null
+	popup_portrait.visible = popup_portrait.texture != null
+	popup_portrait_key = ""
 	popup_button.text = button_text
 	popup_action = action
 	popup_button2.text = button2_text

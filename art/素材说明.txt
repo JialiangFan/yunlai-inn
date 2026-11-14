@@ -19,7 +19,7 @@
   waiter.png      跑堂
   helper.png      杂役
 
-  人物图会按高度缩放到约 46 像素，宽度等比例。
+  人物图会按高度缩放到约 58 像素，宽度等比例。
   像素画推荐原图 16x24、32x48 这类比例。
 
 【家具】art/furniture/
@@ -29,7 +29,7 @@
 
 【菜】art/dishes/              文件名用菜名，例如：
   阳春面.png  小笼包.png  麻婆豆腐.png  北京烤鸭.png …
-  （菜名见 scripts/data.gd，画成 24x24 像素显示在桌上）
+  （菜名见 scripts/data.gd，显示在桌上约 30x30 像素）
 
 注意授权：
   只用 CC0、或明确允许商用的素材；需要署名的，记到 art/CREDITS.txt。

@@ -38,7 +38,7 @@ func disc(p: Vector2, r: float, c: Color) -> void:
 
 
 ## 用图片画小人：脚底对准站位，按高度等比缩放。没有图返回 false。
-func draw_sprite(o: Vector2, t: Texture2D, height := 46.0) -> bool:
+func draw_sprite(o: Vector2, t: Texture2D, height := 58.0) -> bool:
 	if t == null:
 		return false
 	var sz := t.get_size()

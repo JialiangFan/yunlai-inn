@@ -74,6 +74,8 @@ func _process(delta: float) -> void:
 
 
 func _maybe_slack(delta: float) -> void:
+	if info.get("trait", "") == "勤快":
+		return
 	var chance := (100 - stat("毅力")) / 100.0 * 0.008 * delta
 	if randf() < chance:
 		slack_timer = SLACK_TIME
@@ -152,7 +154,7 @@ func _draw() -> void:
 	var moving := is_walking() and slack_timer <= 0.0
 	var bob := absf(sin(anim * 12.0)) * 2.0 if moving else 0.0
 	var o := Vector2(0, -bob)
-	var sprite: Texture2D = main.art.staff(info.role)
+	var sprite: Texture2D = main.art.staff(info.role, int(info.get("look", 0)))
 	# 每个伙计有自己的衣服颜色和腰带颜色
 	var robe := Color(info.get("color", Data.ROLE_COLOR[info.role]))
 	var sash := Color(info.get("sash", "d33a2c"))
