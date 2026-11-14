@@ -54,35 +54,79 @@ const DECOR_ITEMS := [
 	{"id": "censer", "name": "铜鼎香炉", "cost": 900, "bonus": "tip", "value": 0.3, "desc": "赏钱 +30%"},
 ]
 
+# ---------------- 食材 ----------------
+# 四类食材分开进货。spoil：每天打烊时放坏的比例。start：开局库存。价格每个休假日在 0.7~1.5 倍之间波动。
+const FOOD_KINDS := [
+	{"name": "米面", "spoil": 0.0, "start": 500},
+	{"name": "菜蔬", "spoil": 0.08, "start": 400},
+	{"name": "肉禽", "spoil": 0.0, "start": 400},
+	{"name": "河鲜", "spoil": 0.15, "start": 200},
+]
+
 # ---------------- 菜系 ----------------
-# 每个菜系三道菜，由浅到深依次研发。成本、标准售价、做菜秒数、美味(1~5)
+# food：这个菜系用哪类食材（FOOD_KINDS 的序号）。每个菜系三道菜，由浅到深依次研发。成本、标准售价、做菜秒数、美味(1~5)
 const CATEGORIES := [
-	{"name": "面食", "dishes": [
+	{"name": "面食", "food": 0, "dishes": [
 		{"name": "阳春面", "cost": 6, "price": 20, "cook": 3.0, "taste": 1, "color": "eadcae"},
 		{"name": "炸酱面", "cost": 12, "price": 36, "cook": 4.0, "taste": 2, "color": "8a5a2b"},
 		{"name": "牛肉拉面", "cost": 22, "price": 62, "cook": 5.0, "taste": 3, "color": "c26a3a"}]},
-	{"name": "点心", "dishes": [
+	{"name": "点心", "food": 0, "dishes": [
 		{"name": "小笼包", "cost": 10, "price": 30, "cook": 4.0, "taste": 2, "color": "f4ead6"},
 		{"name": "虾饺", "cost": 20, "price": 56, "cook": 5.0, "taste": 3, "color": "f2d7c4"},
 		{"name": "蟹黄汤包", "cost": 40, "price": 110, "cook": 7.0, "taste": 4, "color": "e8b04a"}]},
-	{"name": "家常", "dishes": [
+	{"name": "家常", "food": 1, "dishes": [
 		{"name": "麻婆豆腐", "cost": 14, "price": 42, "cook": 5.0, "taste": 2, "color": "c8442f"},
 		{"name": "宫保鸡丁", "cost": 22, "price": 60, "cook": 6.0, "taste": 3, "color": "d9731f"},
 		{"name": "鱼香肉丝", "cost": 28, "price": 74, "cook": 6.0, "taste": 3, "color": "b8492a"}]},
-	{"name": "烧肉", "dishes": [
+	{"name": "烧肉", "food": 2, "dishes": [
 		{"name": "回锅肉", "cost": 24, "price": 66, "cook": 6.0, "taste": 3, "color": "b5562e"},
 		{"name": "东坡肉", "cost": 35, "price": 92, "cook": 8.0, "taste": 4, "color": "8e3b1f"},
 		{"name": "北京烤鸭", "cost": 80, "price": 188, "cook": 12.0, "taste": 5, "color": "b5571d"}]},
-	{"name": "河鲜", "dishes": [
+	{"name": "河鲜", "food": 3, "dishes": [
 		{"name": "清蒸鲈鱼", "cost": 30, "price": 82, "cook": 7.0, "taste": 3, "color": "d8d0b0"},
 		{"name": "西湖醋鱼", "cost": 45, "price": 112, "cook": 9.0, "taste": 4, "color": "a8682e"},
 		{"name": "松鼠鳜鱼", "cost": 70, "price": 170, "cook": 11.0, "taste": 5, "color": "e07b2a"}]},
-	{"name": "汤品", "dishes": [
+	{"name": "汤品", "food": 2, "dishes": [
 		{"name": "酸辣汤", "cost": 8, "price": 26, "cook": 3.0, "taste": 1, "color": "c9873a"},
 		{"name": "老鸭汤", "cost": 30, "price": 86, "cook": 8.0, "taste": 4, "color": "d9c08a"},
 		{"name": "佛跳墙", "cost": 110, "price": 268, "cook": 14.0, "taste": 5, "color": "c9a227"}]},
 ]
 const START_UNLOCKED := {"面食": 1, "点心": 1}
+
+# ---------------- 节令 ----------------
+# 每季 4 周，16 周一年。arrival 来客倍率；fav 这季最受欢迎的菜系（CATEGORIES 序号）；
+# spoil 食材放坏的倍率；price 各类食材的价格倾向（对应 FOOD_KINDS）。
+const WEEKS_PER_SEASON := 4
+const SEASONS := [
+	{"name": "春", "arrival": 1.0, "fav": 2, "spoil": 1.0, "price": [1.0, 0.85, 1.0, 1.0],
+		"desc": "春笋上市，家常菜卖得好，菜蔬便宜。"},
+	{"name": "夏", "arrival": 0.9, "fav": 0, "spoil": 1.6, "price": [1.0, 0.9, 1.1, 0.85],
+		"desc": "天热客少，面食好卖；河鲜便宜，可菜蔬河鲜坏得快。"},
+	{"name": "秋", "arrival": 1.15, "fav": 4, "spoil": 1.0, "price": [0.85, 1.0, 1.0, 1.1],
+		"desc": "新米下来、鱼蟹正肥，河鲜最受欢迎，客人也多。"},
+	{"name": "冬", "arrival": 0.9, "fav": 5, "spoil": 0.5, "price": [1.0, 1.35, 1.1, 1.2],
+		"desc": "天寒地冻，汤品最好卖；菜蔬贵，但东西放得住。"},
+]
+# 节庆：season 季节，week 这季第几周（0 起），weekday 周几（0 = 周一）。当天来客 ×1.6、赏钱 ×1.5。
+const FESTIVALS := [
+	{"name": "元宵灯会", "season": 0, "week": 0, "weekday": 2},
+	{"name": "端午", "season": 1, "week": 1, "weekday": 3},
+	{"name": "中秋", "season": 2, "week": 2, "weekday": 4},
+	{"name": "除夕", "season": 3, "week": 3, "weekday": 5},
+]
+
+# ---------------- 剧情：对门的醉仙楼 ----------------
+# 到了第 week 周的休假日依次触发。cost 是选「yes」要花的钱，%d 处填 cost。
+const STORY := [
+	{"id": "rival_open", "week": 3, "title": "对门开了醉仙楼", "cost": 0, "yes": "走着瞧", "no": "",
+		"text": "街对面新开了一家「醉仙楼」，楼高三层、张灯结彩，东家姓钱，放话要把城南的生意都揽过去。\n从今往后，上门的客人要少一成。"},
+	{"id": "rival_poach", "week": 5, "title": "醉仙楼来挖人", "cost": 300, "yes": "加钱留人", "no": "由他去",
+		"text": "醉仙楼的钱东家托人给你家手艺最好的厨师递了话，许他双倍工钱。\n花 %d 文给他封个红包、再涨点工钱，他就留下；不然怕是要走。"},
+	{"id": "rival_rumor", "week": 7, "title": "街上起了谣言", "cost": 500, "yes": "请县衙验看", "no": "不理会",
+		"text": "街上有人传，说云来客栈的肉不新鲜、吃坏了人。一打听，是醉仙楼的伙计在嚼舌根。\n花 %d 文请县衙派人来验看后厨、张榜澄清，声望不降反升；不理会的话，声望要掉一截。"},
+	{"id": "rival_duel", "week": 9, "title": "醉仙楼下战书", "cost": 1000, "yes": "应战", "no": "不应",
+		"text": "钱东家下了战书：两家各出一位厨师，在街口摆擂台比菜，赌注 %d 文。\n你家最好的厨师厨艺越高，赢面越大。赢了，醉仙楼没脸再开下去。"},
+]
 
 # ---------------- 访客事件 ----------------
 # 营业时偶尔有人上门，掌柜决定接不接。%d 处填 cost。

@@ -11,7 +11,6 @@ const Sfx = preload("res://scripts/sfx.gd")
 
 # ---------------- 经营数值 ----------------
 const START_MONEY := 2000
-const START_FOOD := 1500
 const START_REP := 10.0
 const OPEN_HOUR := 8.0
 const CLOSE_HOUR := 20.0
@@ -22,11 +21,11 @@ const MAX_TABLES := 8
 const MAX_STAFF := 8
 const DECOR_COSTS := [600, 1500, 3500]
 const DECOR_NAMES := ["朴素", "雅致", "气派", "富丽堂皇"]
-const FOOD_PACKS := [300, 1000]
-const RUSH_FOOD := 200  # 营业日急购的份量，价格翻倍
-const LOW_FOOD := 150
-const AUTO_FOOD_STEP := 500
-const AUTO_FOOD_MAX := 6000
+const FOOD_PACKS := [100, 300]  # 粮行每类食材一次进的份量
+const RUSH_FOOD := 100  # 营业日急购的份量，价格翻倍
+const LOW_FOOD := 60  # 某类食材低于这个数就提醒
+const AUTO_FOOD_STEP := 100
+const AUTO_FOOD_MAX := 2000
 
 const GUEST_TYPES := [
 	{"name": "农夫", "colors": ["6b8e4e", "8a7a4a", "5f8a6a", "9a6a3a"], "budget": [18, 45], "patience": 1.3, "tip": 0.05, "weight": 3.0},
@@ -79,7 +78,8 @@ var title_font: SystemFont  # 标题用楷体，更有古风
 var art = Art.new()  # 图片素材，没有就用代码画
 var sfx  # 音效
 var money := START_MONEY
-var food := START_FOOD
+var food: Array = []  # 四类食材库存，序号对应 Data.FOOD_KINDS
+var food_price: Array = []  # 本周各类食材的价格倍率
 var reputation := START_REP
 var day := 1
 var day_time := 0.0
@@ -94,7 +94,7 @@ var table_level := 0
 var stove_level := 0
 var ornaments := {}  # 已买的摆件：id -> 摆件位序号
 var auto_food_on := true  # 休假日自动补货
-var auto_food_target := 1500
+var auto_food_target: Array = []  # 各类食材自动补到的数
 var hover_shop := ""  # 集市里鼠标指着的铺子
 var speed := 1.0
 var last_speed := 1.0
@@ -129,6 +129,12 @@ var today_arrival := 1.0
 var critic_today := false
 var scholar_loan := false
 var popup_event := ""
+var festival_today := ""  # 今天是什么节，空就是平常日子
+
+# 剧情：对门的醉仙楼
+var story_step := 0  # 下一段剧情在 Data.STORY 里的序号
+var story_wait_week := 0  # 擂台没赢的话，过几周再来
+var rival_on := false  # 醉仙楼开着，来客少一成
 
 var chars_layer: Node2D
 var fx_layer: Node2D
@@ -152,15 +158,12 @@ var dish_rows: Array = []
 var staff_box: VBoxContainer
 var staff_rows: Array = []
 var lbl_town_status: Label
-var lbl_food_stock: Label
-var food_buttons: Array = []
-var btn_rush_food: Button
+var food_rows: Array = []  # 粮行每类食材一行：{"lbl", "buy": [按钮], "rush", "auto"}
 var market_rows: Array = []
 var settings_panel: PanelContainer
 var town_scroll: ScrollContainer
 var town_sections := {}
 var btn_auto_food: Button
-var lbl_auto_food: Label
 var lbl_table_grade: Label
 var btn_table_grade: Button
 var lbl_stove: Label
@@ -217,6 +220,10 @@ func _ready() -> void:
 	fx_layer.z_index = 10
 	add_child(fx_layer)
 	_init_dishes()
+	for k in Data.FOOD_KINDS:
+		food.append(int(k.start))
+		food_price.append(1.0)
+		auto_food_target.append(int(k.start))
 	for i in START_TABLES:
 		_add_table()
 	_reset_day_stats()
@@ -242,6 +249,7 @@ func _init_dishes() -> void:
 			var nd: Dictionary = cat.dishes[j].duplicate()
 			nd["cat"] = ci
 			nd["tier"] = j
+			nd["food"] = cat.food
 			nd["unlocked"] = j < start
 			nd["ratio"] = 1.0
 			nd["research_cost"] = int(nd.price) * 12
@@ -326,6 +334,22 @@ func week() -> int:
 	return (day - 1) / 7 + 1
 
 
+func season_of_week(w: int) -> int:
+	return ((w - 1) / Data.WEEKS_PER_SEASON) % Data.SEASONS.size()
+
+
+func season() -> Dictionary:
+	return Data.SEASONS[season_of_week(week())]
+
+
+func _festival_name() -> String:
+	var wi := (week() - 1) % Data.WEEKS_PER_SEASON
+	for f in Data.FESTIVALS:
+		if int(f.season) == season_of_week(week()) and int(f.week) == wi and int(f.weekday) == weekday():
+			return f.name
+	return ""
+
+
 func _date_text() -> String:
 	return "第 %d 周 %s" % [week(), Data.WEEKDAYS[weekday()]]
 
@@ -351,6 +375,7 @@ func _next_spawn_interval() -> float:
 		if w.role() == "厨师" or w.role() == "掌柜":
 			charm += w.stat("魅力") / 250.0
 	var rate := (1.0 + reputation / 35.0 + decor_level * 0.15 + charm) * rush * today_arrival * (1.0 + decor_bonus("arrival"))
+	rate *= float(season().arrival) * (1.6 if festival_today != "" else 1.0) * (0.9 if rival_on else 1.0)
 	return randf_range(0.7, 1.3) * 7.0 / rate
 
 
@@ -362,7 +387,7 @@ func _try_spawn_customer() -> void:
 	var text_pos := DOOR_POS + Vector2(randf_range(-150, 150), randf_range(-95, -70))
 	if dish == null:
 		stats.lost_price += 1
-		var why := "菜价太贵" if food >= 6 else "店里没食材"
+		var why := "菜价太贵" if _food_total() >= LOW_FOOD else "店里没食材"
 		_float_text(text_pos, "%s嫌%s，走了" % [g.name, why], Color("ffe2b0"))
 		return
 	var open_tables := _free_tables()
@@ -397,9 +422,9 @@ func _pick_dish(budget: int):
 	var options: Array = []
 	var weights: Array = []
 	for d in dishes:
-		if d.unlocked and price_of(d) <= budget and food >= int(d.cost):
+		if d.unlocked and price_of(d) <= budget and food[d.food] >= int(d.cost):
 			options.append(d)
-			weights.append(float(d.taste) + 1.0)
+			weights.append((float(d.taste) + 1.0) * (2.0 if int(d.cat) == int(season().fav) else 1.0))
 	if options.is_empty():
 		return null
 	return options[_weighted_index(weights)]
@@ -696,16 +721,17 @@ func _take_order(w, c) -> bool:
 	if not is_instance_valid(c) or not c.wants_order():
 		return false
 	var cost: int = c.dish.cost
-	if food < cost:
+	var k: int = c.dish.food
+	if food[k] < cost:
 		_float_text(c.position + Vector2(0, -50), "食材用完了…", Color("ffe2b0"))
 		stats.lost_price += 1
 		c.leave_quietly()
 		return false
-	food -= cost
+	food[k] -= cost
 	stats.ingredients += cost
-	if food < LOW_FOOD and not stats.food_warned:
+	if food[k] < LOW_FOOD and not stats.food_warned:
 		stats.food_warned = true
-		_log("食材快用完了！可以在「城镇」里急购。")
+		_log("%s快用完了！可以在「城镇」里急购。" % Data.FOOD_KINDS[k].name)
 	var o := Order.new()
 	o.dish = c.dish
 	o.price = c.price
@@ -837,7 +863,7 @@ func customer_paid(c) -> void:
 	var rep_delta := 0.0
 	var word := ""
 	if s >= 0.8:
-		tip = int(round(c.price * float(c.gtype.tip) * (1.0 + decor_bonus("tip"))))
+		tip = int(round(c.price * float(c.gtype.tip) * (1.0 + decor_bonus("tip")) * (1.5 if festival_today != "" else 1.0)))
 		rep_delta = 1.0 + float(d.taste) * 0.15
 		word = "好吃！"
 	elif s >= 0.55:
@@ -950,6 +976,12 @@ func _end_day() -> void:
 	for w in staff:
 		w.reset_work()
 	var notes := _daily_growth()
+	var spoiled := PackedStringArray()  # 菜蔬、河鲜放不住，每天坏掉一些
+	for k in food.size():
+		var lost := int(food[k] * float(Data.FOOD_KINDS[k].spoil) * float(season().spoil))
+		if lost > 0:
+			food[k] -= lost
+			spoiled.append("%s %d" % [Data.FOOD_KINDS[k].name, lost])
 	if contest_active:
 		contest_days += 1
 	var earned: int = stats.income - wages - RENT - stats.food_bought
@@ -958,8 +990,10 @@ func _end_day() -> void:
 	body += "收入　%d 文（含赏钱 %d 文）\n工钱　-%d 文\n租金　-%d 文\n" % [stats.income, stats.tips, wages, RENT]
 	if stats.food_bought > 0:
 		body += "急购食材　-%d 文\n" % stats.food_bought
-	body += "净赚　%+d 文\n\n用掉食材 %d，还剩 %d　　声望 %d → %d" % [
-		earned, stats.ingredients, food, int(stats.rep_start), int(reputation)]
+	body += "净赚　%+d 文\n\n用掉食材 %d，还剩 %s　　声望 %d → %d" % [
+		earned, stats.ingredients, _food_text(), int(stats.rep_start), int(reputation)]
+	if not spoiled.is_empty():
+		body += "\n放坏了：" + "，".join(spoiled)
 	if stats.served > 0:
 		body += "　　平均满意度 %d" % int(stats.sat_sum / stats.served * 100.0)
 	if contest_active:
@@ -971,7 +1005,7 @@ func _end_day() -> void:
 		print("[autotest]   angry while waiting to order: %d" % stats.angry_order)
 		print("[autotest] %s end: visitors=%d served=%d angry=%d full=%d lost=%d income=%d food=%d money=%d rep=%.1f slacks=%d staff=%d" % [
 			_date_text(), stats.visitors, stats.served, stats.angry, stats.lost_full, stats.lost_price,
-			stats.income, food, money, reputation, stats.slacks, staff.size()])
+			stats.income, _food_total(), money, reputation, stats.slacks, staff.size()])
 	_refresh_ui()
 	if money < 0:
 		_show_popup("客栈周转不灵", body + "\n\n账上亏空 %d 文，只好把客栈盘了出去……" % -money, "重新开始", _restart)
@@ -1018,11 +1052,14 @@ func _start_next_day() -> void:
 	today_patience = 1.0
 	today_arrival = 1.0
 	critic_today = false
+	festival_today = _festival_name()
 	_reset_day_stats()
 	_schedule_event()
 	sfx.play("gong", -4.0)
 	sfx.voice("open")
 	_log("%s开张。" % _date_text())
+	if festival_today != "":
+		_log("今天是%s，街上热闹，客人多、赏钱也大方！" % festival_today)
 	_set_speed(speed if speed > 0.0 else last_speed)
 	queue_redraw()
 
@@ -1049,7 +1086,12 @@ func _enter_rest_day() -> void:
 				continue
 			notes.append("%s嫌工钱少、干得不痛快，辞工走了。" % w.info.name)
 			_remove_staff(w)
+	festival_today = ""
+	if week() % Data.WEEKS_PER_SEASON == 0:
+		var ns: Dictionary = Data.SEASONS[season_of_week(week() + 1)]
+		notes.append("下周入%s：%s" % [ns.name, ns.desc])
 	_refresh_market()
+	_roll_food_prices()
 	var restock := _auto_restock()
 	if restock != "":
 		notes.append(restock)
@@ -1076,9 +1118,9 @@ func _enter_rest_day() -> void:
 # ---------------- 存档 ----------------
 # 只在休假日存：这时大堂没有客人和订单，存经营数据就够了。读档后回到那个休假日的集市。
 
-const SAVE_VARS := ["money", "food", "reputation", "day", "decor_level", "table_level", "stove_level",
+const SAVE_VARS := ["money", "food", "food_price", "reputation", "day", "decor_level", "table_level", "stove_level",
 	"auto_food_on", "auto_food_target", "contest_idx", "contest_active", "contest_days", "contest_value",
-	"contest_sat_sum", "contest_sat_n", "scholar_loan", "game_finished"]
+	"contest_sat_sum", "contest_sat_n", "scholar_loan", "game_finished", "story_step", "story_wait_week", "rival_on"]
 
 
 func _save_path() -> String:
@@ -1106,6 +1148,8 @@ func _load_game() -> void:
 		return
 	for k in SAVE_VARS:
 		set(k, type_convert(s[k], typeof(get(k))))
+	food = food.map(func(v): return int(v))
+	auto_food_target = auto_food_target.map(func(v): return int(v))
 	tables.clear()
 	for i in int(s.tables):
 		_add_table()
@@ -1144,9 +1188,88 @@ func _load_game() -> void:
 
 
 func _after_rest_popup() -> void:
+	if _story_due():
+		var ev: Dictionary = Data.STORY[story_step]
+		story_step += 1
+		var text: String = ev.text
+		if text.contains("%d"):
+			text = text % int(ev.cost)
+		_show_popup(ev.title, text, ev.yes, _story_choice.bind(ev, true), ev.no, _story_choice.bind(ev, false))
+		return
 	tabs.current_tab = 2
 	if autotest:
 		_autotest_rest_day()
+
+
+# ---------------- 剧情 ----------------
+
+func _story_due() -> bool:
+	if game_finished or story_step >= Data.STORY.size():
+		return false
+	return week() >= maxi(int(Data.STORY[story_step].week), story_wait_week)
+
+
+func _story_choice(ev: Dictionary, yes: bool) -> void:
+	var msg := _story_effect(ev, yes)
+	_log(msg)
+	_refresh_ui()
+	_show_popup(ev.title, msg, "知道了", _after_rest_popup)
+
+
+func _best_cook():
+	var best = null
+	for w in staff_of("厨师"):
+		if best == null or w.stat("厨艺") > best.stat("厨艺"):
+			best = w
+	return best
+
+
+## 剧情选择的后果，返回给玩家看的结果。
+func _story_effect(ev: Dictionary, yes: bool) -> String:
+	var cost: int = ev.cost
+	var prefix := ""
+	if yes and money < cost:
+		prefix = "银钱不够，只好作罢。\n"
+		yes = false
+	if yes:
+		money -= cost
+	var best = _best_cook()
+	match ev.id:
+		"rival_open":
+			rival_on = true
+			return "醉仙楼开张了。往后得打起精神，别让人比下去。"
+		"rival_poach":
+			if best == null:
+				return prefix + "店里眼下没有厨师，醉仙楼的人白跑一趟。"
+			if yes:
+				best.info.stats["向心力"] = mini(99, best.stat("向心力") + 20)
+				best.info.wage = int(best.info.wage) + 10
+				return "%s收了红包，拍着胸脯说生是云来客栈的人。" % best.info.name
+			if staff_of("厨师").size() > 1:
+				_remove_staff(best)
+				_rebuild_staff_list()
+				return prefix + "%s卷了铺盖，跳槽去了醉仙楼。" % best.info.name
+			return prefix + "%s念着旧情，到底没走。" % best.info.name
+		"rival_rumor":
+			if yes:
+				_change_rep(5.0)
+				return "县衙的人验看了后厨，张榜澄清。街坊们都说云来客栈干净实在，声望反倒涨了。"
+			_change_rep(-8.0)
+			return prefix + "谣言越传越真，好些老客都不来了。声望掉了一截。"
+		"rival_duel":
+			if yes and best != null and randf() < best.stat("厨艺") / 110.0:
+				money += cost * 2
+				rival_on = false
+				_change_rep(8.0)
+				return "%s在擂台上一道菜惊艳四座，赢回 %d 文！\n醉仙楼没脸再开，钱东家关门回乡了。" % [best.info.name, cost * 2]
+			story_step -= 1  # 过四周再下战书
+			story_wait_week = week() + 4
+			if yes:
+				_change_rep(-3.0)
+				return "擂台上输了一招，赌注没了。钱东家说，过一个月再比一回。"
+			_change_rep(-2.0)
+			return prefix + "你没应战，醉仙楼的人在街上笑话了好几天。他们说一个月后还会再来。"
+	return prefix
 
 
 func _end_rest_day() -> void:
@@ -1158,20 +1281,58 @@ func _end_rest_day() -> void:
 	_start_next_day()
 
 
-## 休假日自动补货：把食材补到设定的数，钱不够就补能付得起的部分。
+## 休假日自动补货：每类食材补到设定的数，钱不够就补能付得起的部分。
 func _auto_restock() -> String:
-	if not auto_food_on or food >= auto_food_target:
+	if not auto_food_on:
 		return ""
-	var need := auto_food_target - food
-	var spend := mini(need, maxi(money, 0))
-	if spend <= 0:
-		return "银钱不够，这周没能自动补货。"
-	money -= spend
-	food += spend
-	_log("自动补货：在粮行进了 %d 文的食材。" % spend)
-	if spend < need:
-		return "自动补货：银钱不够，只进了 %d 文的食材，库存 %d。" % [spend, food]
-	return "自动补货：在粮行进了 %d 文的食材，库存补到 %d。" % [spend, food]
+	var bought := PackedStringArray()
+	var short := false
+	for k in food.size():
+		var need: int = auto_food_target[k] - food[k]
+		if need <= 0:
+			continue
+		var amount := mini(need, int(maxi(money, 0) / _food_mult(k)))
+		if amount < need:
+			short = true
+		if amount <= 0:
+			continue
+		money -= _food_cost(k, amount)
+		food[k] += amount
+		bought.append("%s %d" % [Data.FOOD_KINDS[k].name, amount])
+	if bought.is_empty():
+		return "银钱不够，这周没能自动补货。" if short else ""
+	var msg := "自动补货：进了 " + "，".join(bought) + ("（银钱不够，没补满）" if short else "")
+	_log(msg)
+	return msg
+
+
+## 每个休假日食材行情变一变。
+func _roll_food_prices() -> void:
+	for k in food_price.size():
+		food_price[k] = clampf(snappedf(food_price[k] * randf_range(0.8, 1.25), 0.05), 0.7, 1.5)
+
+
+## 食材价格倍率：本周行情 × 季节倾向。
+func _food_mult(k: int) -> float:
+	return float(food_price[k]) * float(season().price[k])
+
+
+func _food_cost(k: int, amount: int) -> int:
+	return ceili(amount * _food_mult(k))
+
+
+func _food_total() -> int:
+	var t := 0
+	for v in food:
+		t += v
+	return t
+
+
+func _food_text() -> String:
+	var parts := PackedStringArray()
+	for k in food.size():
+		parts.append("%s %d" % [Data.FOOD_KINDS[k].name, food[k]])
+	return "，".join(parts)
 
 
 func _toggle_auto_food() -> void:
@@ -1179,8 +1340,8 @@ func _toggle_auto_food() -> void:
 	_refresh_ui()
 
 
-func _change_auto_food(step: int) -> void:
-	auto_food_target = clampi(auto_food_target + step, AUTO_FOOD_STEP, AUTO_FOOD_MAX)
+func _change_auto_food(k: int, step: int) -> void:
+	auto_food_target[k] = clampi(auto_food_target[k] + step, 0, AUTO_FOOD_MAX)
 	_refresh_ui()
 
 
@@ -1191,24 +1352,25 @@ func _restart() -> void:
 
 # ---------------- 城镇 ----------------
 
-func _buy_food(amount: int) -> void:
-	if not is_rest_day or money < amount:
+func _buy_food(k: int, amount: int) -> void:
+	var cost := _food_cost(k, amount)
+	if not is_rest_day or money < cost:
 		return
-	money -= amount
-	food += amount
-	_log("在粮行进了 %d 文的食材。" % amount)
+	money -= cost
+	food[k] += amount
+	_log("在粮行进了 %d %s，花了 %d 文。" % [amount, Data.FOOD_KINDS[k].name, cost])
 	_refresh_ui()
 
 
-func _rush_food() -> void:
-	var cost := RUSH_FOOD * 2
+func _rush_food(k: int) -> void:
+	var cost := _food_cost(k, RUSH_FOOD) * 2
 	if is_rest_day or money < cost:
 		return
 	money -= cost
-	food += RUSH_FOOD
+	food[k] += RUSH_FOOD
 	stats.food_bought += cost
 	stats.food_warned = false
-	_log("派人急购了一批食材，花了 %d 文。" % cost)
+	_log("派人急购了 %d %s，花了 %d 文。" % [RUSH_FOOD, Data.FOOD_KINDS[k].name, cost])
 	_refresh_ui()
 
 
@@ -1598,9 +1760,9 @@ func _draw_kitchen() -> void:
 		draw_rect(Rect2(hx - 3, 80, 6, 12), Color("9e3a24") if k != 1 else Color("c0392b"))
 	# 左边米缸、菜筐（食材越少越空）
 	_disc(Vector2(60, 108), 18.0, Color("8b5a2b"))
-	_disc(Vector2(60, 108), 13.0, Color("efe6d2") if food >= LOW_FOOD else Color("6b4a2a"))
+	_disc(Vector2(60, 108), 13.0, Color("efe6d2") if food[0] >= LOW_FOOD else Color("6b4a2a"))
 	draw_rect(Rect2(38, 138, 52, 28), Color("a0744a"))
-	if food >= LOW_FOOD:
+	if food[1] >= LOW_FOOD:
 		_disc(Vector2(50, 147), 6.0, Color("6aa84f"))
 		_disc(Vector2(64, 149), 6.0, Color("e06666"))
 		_disc(Vector2(78, 146), 6.0, Color("f1c232"))
@@ -2555,29 +2717,31 @@ func _build_town_tab() -> Control:
 
 	town_sections["grain"] = _section("粮行")
 	list.add_child(town_sections["grain"])
-	lbl_food_stock = _label("", 14)
-	list.add_child(lbl_food_stock)
-	var fb := HBoxContainer.new()
-	for amount in FOOD_PACKS:
-		var b := _button("进货 %d（%d 文）" % [amount, amount], _buy_food.bind(amount))
-		fb.add_child(b)
-		food_buttons.append(b)
-	list.add_child(fb)
-	btn_rush_food = _button("急购 %d 食材（%d 文）" % [RUSH_FOOD, RUSH_FOOD * 2], _rush_food)
-	list.add_child(btn_rush_food)
-	# 自动补货：每个休假日把食材补到设定的数
-	var auto_row := HBoxContainer.new()
-	auto_row.add_theme_constant_override("separation", 4)
 	btn_auto_food = _button("", _toggle_auto_food, "SecondaryButton")
-	btn_auto_food.custom_minimum_size = Vector2(110, 0)
-	auto_row.add_child(btn_auto_food)
-	auto_row.add_child(_button("－", _change_auto_food.bind(-AUTO_FOOD_STEP), "SecondaryButton"))
-	lbl_auto_food = _label("", 14)
-	lbl_auto_food.custom_minimum_size = Vector2(110, 0)
-	lbl_auto_food.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	auto_row.add_child(lbl_auto_food)
-	auto_row.add_child(_button("＋", _change_auto_food.bind(AUTO_FOOD_STEP), "SecondaryButton"))
-	list.add_child(auto_row)
+	list.add_child(btn_auto_food)
+	for k in Data.FOOD_KINDS.size():
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		var fr := {"lbl": _label("", 14), "buy": []}
+		fr.lbl.custom_minimum_size = Vector2(150, 0)
+		row.add_child(fr.lbl)
+		for amount in FOOD_PACKS:
+			var b := _button("+%d" % amount, _buy_food.bind(k, amount))
+			row.add_child(b)
+			fr.buy.append(b)
+		fr["rush"] = _button("急购 %d" % RUSH_FOOD, _rush_food.bind(k))
+		row.add_child(fr.rush)
+		list.add_child(row)
+		# 自动补货：每个休假日把这类食材补到设定的数
+		var auto_row := HBoxContainer.new()
+		auto_row.add_theme_constant_override("separation", 4)
+		fr["auto"] = _label("", 13, Color("6b5a44"))
+		fr.auto.custom_minimum_size = Vector2(150, 0)
+		auto_row.add_child(fr.auto)
+		auto_row.add_child(_button("－", _change_auto_food.bind(k, -AUTO_FOOD_STEP), "SecondaryButton"))
+		auto_row.add_child(_button("＋", _change_auto_food.bind(k, AUTO_FOOD_STEP), "SecondaryButton"))
+		list.add_child(auto_row)
+		food_rows.append(fr)
 
 	town_sections["labor"] = _section("人力市场")
 	list.add_child(town_sections["labor"])
@@ -2696,11 +2860,12 @@ func _build_contest_tab() -> Control:
 func _refresh_ui() -> void:
 	if lbl_day == null:
 		return
-	lbl_day.text = "%s　%s%s" % [_date_text(), _clock_text(), "　已打烊" if (not is_open and not is_rest_day) else ""]
+	lbl_day.text = "%s %s%s　%s%s" % [season().name, _date_text(), "·" + festival_today if festival_today != "" else "", _clock_text(), "　已打烊" if (not is_open and not is_rest_day) else ""]
 	bar_day.value = 1.0 if is_rest_day else clampf(day_time / ((CLOSE_HOUR - OPEN_HOUR) * SECONDS_PER_HOUR), 0.0, 1.0)
 	lbl_money.text = "%d 文" % money
-	lbl_food.text = "食材 %d" % food
-	lbl_food.add_theme_color_override("font_color", Color("cfe8b0") if food >= LOW_FOOD else Color("ff8a6a"))
+	lbl_food.text = "食材 %d" % _food_total()
+	lbl_food.tooltip_text = _food_text()
+	lbl_food.add_theme_color_override("font_color", Color("cfe8b0") if food.min() >= LOW_FOOD else Color("ff8a6a"))
 	bar_rep.value = reputation
 	lbl_rep.text = "声望 %d" % int(reputation)
 
@@ -2748,13 +2913,21 @@ func _refresh_ui() -> void:
 	else:
 		lbl_town_status.text = "今天营业，进不了城。粮行只能急购（价格翻倍），其他要等休假日。"
 	btn_open_shop.visible = is_rest_day
-	lbl_food_stock.text = "食材库存 %d（每道菜按成本消耗）" % food
-	for i in food_buttons.size():
-		food_buttons[i].disabled = not is_rest_day or money < int(FOOD_PACKS[i])
-	btn_rush_food.visible = not is_rest_day
-	btn_rush_food.disabled = money < RUSH_FOOD * 2
-	btn_auto_food.text = "自动补货：开" if auto_food_on else "自动补货：关"
-	lbl_auto_food.text = "补到 %d" % auto_food_target
+	btn_auto_food.text = "休假日自动补货：开" if auto_food_on else "休假日自动补货：关"
+	for k in food_rows.size():
+		var fr: Dictionary = food_rows[k]
+		var kind: Dictionary = Data.FOOD_KINDS[k]
+		fr.lbl.text = "%s %d　价×%.2f" % [kind.name, food[k], _food_mult(k)]
+		fr.lbl.add_theme_color_override("font_color", Color("3b2a1a") if food[k] >= LOW_FOOD else Color("b03a2a"))
+		fr.lbl.tooltip_text = "每天放坏 %d%%" % int(float(kind.spoil) * 100) if float(kind.spoil) > 0 else "放得住，不会坏"
+		for i in fr.buy.size():
+			fr.buy[i].visible = is_rest_day
+			fr.buy[i].disabled = money < _food_cost(k, FOOD_PACKS[i])
+			fr.buy[i].tooltip_text = "%d 文" % _food_cost(k, FOOD_PACKS[i])
+		fr.rush.visible = not is_rest_day
+		fr.rush.disabled = money < _food_cost(k, RUSH_FOOD) * 2
+		fr.rush.tooltip_text = "营业日急购价翻倍：%d 文" % (_food_cost(k, RUSH_FOOD) * 2)
+		fr.auto.text = "　自动补到 %d" % auto_food_target[k]
 	for i in market_rows.size():
 		var row: Dictionary = market_rows[i]
 		if i >= market.size():
@@ -2967,8 +3140,9 @@ func _can_shoot() -> bool:
 
 
 func _autotest_tick() -> void:
-	if food < 250:
-		_rush_food()
+	for k in food.size():
+		if food[k] < 80:
+			_rush_food(k)
 	if AUTO_EVENTS.has(day) and day_time > 40.0 and not auto_done.has("ev%d" % day):
 		auto_done["ev%d" % day] = true
 		event_hour = -1.0
@@ -3012,7 +3186,8 @@ func _autotest_rest_day() -> void:
 	await get_tree().process_frame
 	if day == 7:
 		money += 18000  # 测试资金，把各种操作都走一遍
-		_buy_food(1000)
+		for k in food.size():
+			_buy_food(k, 300)
 		for i in 3:
 			_hire_candidate(i)
 		_select_staff(staff[0])
@@ -3043,7 +3218,7 @@ func _autotest_rest_day() -> void:
 		print("[autotest] shop: table_level=%d stove_level=%d ornaments=%s" % [table_level, stove_level, str(ornaments)])
 		for id in ["grain", "labor", "grocer", "carpenter", "notice"]:
 			_open_shop(id)
-		print("[autotest] market: food=%d auto=%s target=%d shop_at(130,250)=%s shop_at(770,540)=%s" % [
+		print("[autotest] market: food=%s auto=%s target=%s shop_at(130,250)=%s shop_at(770,540)=%s" % [
 			food, auto_food_on, auto_food_target, _shop_at(Vector2(130, 250)), _shop_at(Vector2(770, 540))])
 		hover_shop = "grain"
 		_toggle_settings()
@@ -3052,11 +3227,18 @@ func _autotest_rest_day() -> void:
 		await _shot("settings")
 		_toggle_settings()
 		_save_game()
-		var before := "%d|%d|%s|%s|%s" % [money, staff.size(), research.points, str(ornaments), staff[0].info.stats]
+		var before := "%d|%d|%s|%s|%s|%s|%s" % [money, staff.size(), research.points, str(ornaments), staff[0].info.stats, food, food_price]
 		_load_game()
-		var after := "%d|%d|%s|%s|%s" % [money, staff.size(), research.points, str(ornaments), staff[0].info.stats]
+		var after := "%d|%d|%s|%s|%s|%s|%s" % [money, staff.size(), research.points, str(ornaments), staff[0].info.stats, food, food_price]
 		print("[autotest] save/load roundtrip: ", "same" if before == after else "DIFF %s vs %s" % [before, after])
 		assert(before == after)
+		money += 5000
+		for ev in Data.STORY:
+			print("[autotest] story %s: %s | rival=%s cooks=%d" % [ev.id, _story_effect(ev, true).replace("\n", " "), rival_on, staff_of("厨师").size()])
+		story_step = 0
+		story_wait_week = 0
+		rival_on = false
+		print("[autotest] season w1=%s w5=%s festival_day3=%s" % [season().name, Data.SEASONS[season_of_week(5)].name, Data.FESTIVALS[0].name])
 		for t in [3, 2, 1, 0, 4]:
 			tabs.current_tab = t
 			await _shot("rest_tab%d" % t)
