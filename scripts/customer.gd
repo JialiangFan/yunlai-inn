@@ -7,6 +7,7 @@ enum S { WALK_IN, WANT_ORDER, WAIT_FOOD, EATING, SELF_PAY, TO_COUNTER, LEAVING }
 const ORDER_PATIENCE := 18.0
 const FOOD_PATIENCE := 30.0
 const EAT_TIME := 5.0
+const EAT_CYCLE := 1.25  # 吃一口的秒数
 const SELF_PAY_TIME := 6.0
 
 var gtype: Dictionary
@@ -140,9 +141,22 @@ func _draw() -> void:
 	var walking := state == S.WALK_IN or state == S.LEAVING or (state == S.TO_COUNTER and is_walking())
 	var bob := absf(sin(anim * 11.0)) * 2.5 if walking else 0.0
 	var o := Vector2(0, -bob)
+	# 吃饭一口的节奏：伸筷子到碗里 → 夹起送到嘴边 → 嚼
+	var bite := fmod(anim, EAT_CYCLE) / EAT_CYCLE
+	var reach := 0.0  # 0 = 筷子在嘴边，1 = 伸到碗里
+	var tilt := 0.0
+	var squash := 1.0
 	if state == S.EATING:
-		o.y += absf(sin(anim * 5.0)) * 2.0  # 低头夹菜、抬头吃
-	if not draw_sprite(o, main.art.guest(gtype.name)):
+		if bite < 0.35:
+			reach = bite / 0.35
+		elif bite < 0.45:
+			reach = 1.0
+		elif bite < 0.75:
+			reach = 1.0 - (bite - 0.45) / 0.3
+		else:
+			squash = 1.0 - 0.03 * absf(sin((bite - 0.75) * TAU * 4.0))  # 腮帮子一鼓一鼓
+		tilt = 0.04 + reach * 0.12  # 夹菜时朝桌子俯身
+	if not draw_sprite(o, main.art.guest(gtype.name), 58.0, tilt, squash):
 		draw_body(o, robe, true, sash)
 		_draw_hat(o)
 	match state:
@@ -153,11 +167,15 @@ func _draw() -> void:
 			_bubble(o + Vector2(0, -66), dish.name, Color("3b2a1a"))
 			_patience_bar(o + Vector2(0, -48))
 		S.EATING:
-			# 筷子一上一下：从碗里夹到嘴边
-			var lift := (sin(anim * 5.0) + 1.0) * 0.5
-			var tip := o + Vector2(10, -14 - lift * 16.0)
-			draw_line(tip + Vector2(8, 12), tip, Color("6b4226"), 1.5)
-			draw_line(tip + Vector2(10, 11), tip + Vector2(2, -1), Color("6b4226"), 1.5)
+			# 筷子：从嘴边伸到桌上的碗里，夹一口再送回来（碗在桌子中心偏左，座位在桌子左边 46 像素）
+			var mouth := o + Vector2(5, -24)
+			var bowl := o + Vector2(36, -4)
+			var tip := mouth.lerp(bowl, reach)
+			var base := (o + Vector2(14, -12)).lerp(o + Vector2(24, -8), reach)
+			draw_line(base, tip, Color("3b2416"), 2.4)
+			draw_line(base + Vector2(2, 2.5), tip + Vector2(1.5, 2), Color("3b2416"), 2.4)
+			if bite >= 0.4 and bite < 0.75:  # 夹着的一口菜
+				disc(tip + Vector2(0.8, 1.0), 3.4, Color(dish.color).darkened(0.1))
 			var ratio := clampf(1.0 - timer / EAT_TIME, 0.0, 1.0)
 			draw_rect(Rect2(o + Vector2(-14, -48), Vector2(28, 4)), Color(0, 0, 0, 0.45))
 			draw_rect(Rect2(o + Vector2(-14, -48), Vector2(28 * ratio, 4)), Color("8fd16a"))

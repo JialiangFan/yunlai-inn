@@ -113,6 +113,7 @@ var game_finished := false
 var decor_level := 0
 var table_level := 0
 var stove_level := 0
+var counter_level := 0
 var ornaments := {}  # 已买的摆件：id -> 摆件位序号（挂画是 WALL_SLOTS 的序号，其余是 DECOR_SLOTS 的）
 var table_slot: Array = []  # 每张桌子摆在哪个桌位（TABLE_SLOTS 序号）
 var arranging := false  # 休假日进店布置
@@ -197,6 +198,8 @@ var lbl_table_grade: Label
 var btn_table_grade: Button
 var lbl_stove: Label
 var btn_stove: Button
+var lbl_counter: Label
+var btn_counter: Button
 var ornament_rows: Array = []
 var lbl_tables: Label
 var btn_table: Button
@@ -878,6 +881,8 @@ func dish_ready(o) -> void:
 # ---------------- 结账 ----------------
 
 func customer_done_eating(c) -> void:
+	if randf() < 0.3:
+		_float_text(c.position + Vector2(0, -60), ["嗝～", "饱了！", "舒坦"].pick_random(), Color.WHITE)
 	if staff_of("掌柜").is_empty():
 		c.self_pay()  # 没掌柜：在桌边自己慢慢算账，占着桌子
 		return
@@ -1234,7 +1239,7 @@ func _enter_rest_day(week_summary := "") -> void:
 # ---------------- 存档 ----------------
 # 只在休假日存：这时大堂没有客人和订单，存经营数据就够了。读档后回到那个休假日的集市。
 
-const SAVE_VARS := ["money", "food", "food_price", "reputation", "day", "decor_level", "table_level", "stove_level",
+const SAVE_VARS := ["money", "food", "food_price", "reputation", "day", "decor_level", "table_level", "stove_level", "counter_level",
 	"auto_food_on", "auto_food_target", "contest_idx", "contest_active", "contest_days", "contest_value",
 	"contest_sat_sum", "contest_sat_n", "scholar_loan", "game_finished", "story_step", "story_wait_week", "regular_friend", "rivals", "chapter", "ending_shown"]
 
@@ -1780,6 +1785,23 @@ func _upgrade_stove() -> void:
 	queue_redraw()
 
 
+func _upgrade_counter() -> void:
+	if not is_rest_day or counter_level >= Data.COUNTER_GRADES.size() - 1:
+		return
+	var g: Dictionary = Data.COUNTER_GRADES[counter_level + 1]
+	if money < int(g.cost):
+		return
+	money -= int(g.cost)
+	counter_level += 1
+	_log("柜台换成了%s，结账更快了。" % g.name)
+	_refresh_ui()
+	queue_redraw()
+
+
+func counter_speed() -> float:
+	return float(Data.COUNTER_GRADES[counter_level].speed)
+
+
 func _free_slot(after := -1, wall := false) -> int:
 	var used := {}
 	for id in ornaments:
@@ -2244,8 +2266,8 @@ func _draw_hall() -> void:
 		draw_rect(Rect2(425, 236, 50, 446), Color("9e2b25"))
 		draw_rect(Rect2(425, 236, 4, 446), Color("d4a640"))
 		draw_rect(Rect2(471, 236, 4, 446), Color("d4a640"))
-	# 收银柜台：装修到「气派」换雕花描金柜台
-	var counter_tex: Texture2D = art.tex("furniture/counter_%d" % (1 if decor_level >= 2 else 0))
+	# 收银柜台：木工坊可以换
+	var counter_tex: Texture2D = art.tex("furniture/counter_%d" % counter_level)
 	if counter_tex != null:
 		var cs := counter_tex.get_size() * (160.0 / counter_tex.get_size().x)
 		draw_texture_rect(counter_tex, Rect2(Vector2(790, 670) - cs / 2.0, cs), false)
@@ -3274,6 +3296,12 @@ func _build_shop_tab() -> Control:
 	btn_table_grade = _button("", _upgrade_tables)
 	list.add_child(btn_table_grade)
 
+	list.add_child(_section("收银柜台"))
+	lbl_counter = _wrap(_label("", 14))
+	list.add_child(lbl_counter)
+	btn_counter = _button("", _upgrade_counter)
+	list.add_child(btn_counter)
+
 	list.add_child(_section("后厨灶台"))
 	lbl_stove = _wrap(_label("", 14))
 	list.add_child(lbl_stove)
@@ -3440,6 +3468,15 @@ func _refresh_ui() -> void:
 		var ng: Dictionary = Data.TABLE_GRADES[table_level + 1]
 		btn_table_grade.text = "换成%s（%d 文）" % [ng.name, ng.cost]
 		btn_table_grade.disabled = not is_rest_day or money < int(ng.cost)
+	var cg: Dictionary = Data.COUNTER_GRADES[counter_level]
+	lbl_counter.text = "现在用的是%s（结账速度 ×%.2f）" % [cg.name, float(cg.speed)]
+	if counter_level >= Data.COUNTER_GRADES.size() - 1:
+		btn_counter.text = "已经是最好的柜台了"
+		btn_counter.disabled = true
+	else:
+		var nc: Dictionary = Data.COUNTER_GRADES[counter_level + 1]
+		btn_counter.text = "换成%s（%d 文）" % [nc.name, nc.cost]
+		btn_counter.disabled = not is_rest_day or money < int(nc.cost)
 	var sg: Dictionary = Data.STOVE_GRADES[stove_level]
 	lbl_stove.text = "现在用的是%s（做菜速度 ×%.2f）" % [sg.name, float(sg.speed)]
 	if stove_level >= Data.STOVE_GRADES.size() - 1:
@@ -3632,6 +3669,12 @@ func _autotest_tick() -> void:
 		for ev in Data.EVENTS:
 			if ev.id == AUTO_EVENTS[day]:
 				_trigger_event(ev)
+	if day == 2 and not auto_done.has("shot_eat"):
+		for c in customers:
+			if c.state == Customer.S.EATING and fmod(c.anim, Customer.EAT_CYCLE) / Customer.EAT_CYCLE > 0.5:
+				auto_done["shot_eat"] = true
+				_shot("eating")
+				break
 	if day == 3 and day_time > 100.0 and not auto_done.has("shot_d3"):
 		auto_done["shot_d3"] = true
 		_shot("d3_busy")
@@ -3690,6 +3733,7 @@ func _autotest_rest_day() -> void:
 		_buy_decor()
 		_upgrade_tables()
 		_upgrade_stove()
+		_upgrade_counter()
 		for id in ["screen", "fish", "flower", "censer", "curio", "scroll", "wall_landscape", "wall_tiger"]:
 			_buy_ornament(id)
 		_move_ornament("fish")

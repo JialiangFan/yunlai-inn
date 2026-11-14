@@ -52,6 +52,11 @@ const STOVE_GRADES := [
 	{"name": "青砖大灶", "cost": 1000, "speed": 1.15},
 	{"name": "黄铜御灶", "cost": 2800, "speed": 1.3},
 ]
+# 柜台档次：结账速度倍率。图片 art/furniture/counter_<档次>.png
+const COUNTER_GRADES := [
+	{"name": "普通木柜台", "cost": 0, "speed": 1.0},
+	{"name": "雕花描金柜台", "cost": 1500, "speed": 1.3},
+]
 # 摆件：每样买一次，摆在大堂的摆件位上，可以换位置
 # 加成：sat 满意度、patience 客人耐心、arrival 来客、rep 声望增长、tip 赏钱、rich 有钱客人
 const DECOR_ITEMS := [

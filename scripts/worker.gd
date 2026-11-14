@@ -105,7 +105,7 @@ func _cashier(delta: float) -> void:
 	if pay_target == null:
 		pay_target = main.next_payer()
 		if pay_target != null:
-			pay_total = 2.5 / skill_mult("计算")
+			pay_total = 2.5 / (skill_mult("计算") * main.counter_speed())
 			pay_timer = pay_total
 			main.sfx.play("abacus", -4.0)
 			abacus_again = pay_total > 1.6  # 算得慢的掌柜，半路再拨一阵

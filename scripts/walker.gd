@@ -43,7 +43,8 @@ func disc(p: Vector2, r: float, c: Color) -> void:
 
 
 ## 用图片画小人：脚底对准站位，按高度等比缩放。没有图返回 false。
-func draw_sprite(o: Vector2, t: Texture2D, height := 58.0) -> bool:
+## tilt：额外前倾（弧度，正数朝面向的方向倾）；squash：竖直方向压缩，嚼东西时用。
+func draw_sprite(o: Vector2, t: Texture2D, height := 58.0, tilt := 0.0, squash := 1.0) -> bool:
 	if t == null:
 		return false
 	var sz := t.get_size()
@@ -55,7 +56,7 @@ func draw_sprite(o: Vector2, t: Texture2D, height := 58.0) -> bool:
 		disc(Vector2(-facing * (6.0 + dust * 8.0), 13.0 - dust * 4.0), 2.0 + dust * 2.0, Color(0.8, 0.7, 0.55, 0.35 * (1.0 - dust)))
 	# 以脚底为轴：走路时身体左右摇摆、一颠一颠，朝哪边走就翻向哪边
 	var lift := absf(step) * 3.0
-	draw_set_transform(o + Vector2(0, 15.0 - lift), step * 0.08, Vector2(facing, 1.0))
+	draw_set_transform(o + Vector2(0, 15.0 - lift), step * 0.08 + tilt * facing, Vector2(facing, squash))
 	draw_texture_rect(t, Rect2(Vector2(-w / 2.0, -height), Vector2(w, height)), false)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	return true
