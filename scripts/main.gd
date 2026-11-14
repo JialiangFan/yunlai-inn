@@ -25,6 +25,7 @@ const RUSH_FOOD := 100  # 营业日急购的份量，价格翻倍
 const LOW_FOOD := 60  # 某类食材低于这个数就提醒
 const AUTO_FOOD_STEP := 100
 const AUTO_FOOD_MAX := 2000
+const CASH_RESERVE := 800  # 自动补货、自动玩家花钱都至少留这么多周转
 
 # 客人身份。fav：最爱的菜系（Data.CATEGORIES 序号），点到爱吃的更满意；rep：声望到了才会上门；say：进门的口头禅。
 const GUEST_TYPES := [
@@ -149,6 +150,8 @@ var contest_sat_n := 0
 
 # 当天的访客事件
 var event_hour := -1.0
+var mishap_hour := -1.0  # 今天没选项的天灾在几点
+var last_mishap := ""  # 昨天出的天灾，连着两天不重复
 var today_patience := 1.0
 var today_arrival := 1.0
 var critic_today := false
@@ -235,6 +238,8 @@ func _ready() -> void:
 	for a in OS.get_cmdline_user_args():
 		if a == "--autotest":
 			autotest = true
+		elif a.begins_with("--seed="):  # 固定随机种子，实验可复现
+			seed(int(a.trim_prefix("--seed=")))
 		elif a.begins_with("--play="):
 			autoplay_weeks = int(a.trim_prefix("--play="))
 		elif a == "--market":  # 调试用：开局直接进休假日的集市
@@ -334,6 +339,9 @@ func _process(delta: float) -> void:
 				if event_hour > 0.0 and current_hour() >= event_hour:
 					event_hour = -1.0
 					_trigger_random_event()
+				if mishap_hour > 0.0 and current_hour() >= mishap_hour:
+					mishap_hour = -1.0
+					_trigger_mishap()
 		elif customers.is_empty():
 			_end_day()
 	ui_refresh_timer -= delta
@@ -1033,24 +1041,18 @@ func customer_paid(c) -> void:
 		s += (1.0 - ratio) * 0.3
 	s = clampf(s, 0.0, 1.0)
 	var tip := 0
-	var rep_delta := 0.0
 	var word := ""
 	if s >= 0.8:
 		tip = int(round(c.price * float(c.gtype.tip) * (1.0 + decor_bonus("tip")) * (1.5 if festival_today != "" else 1.0)))
-		rep_delta = 1.0 + float(d.taste) * 0.15
 		word = "好吃！"
 	elif s >= 0.55:
-		rep_delta = 0.4
 		word = "不错"
 	elif s >= 0.3:
 		word = "一般般"
 	else:
-		rep_delta = -1.0
 		word = "不值这个价…"
-	if critic_today:
-		rep_delta *= 2.0
-	_change_rep(rep_delta)
 	var income: int = c.price + tip
+	_book("营业", income)
 	money += income
 	if not staff_of("掌柜").is_empty():  # 铜钱一枚枚飞进柜台的钱匣
 		for j in clampi(income / 30 + 1, 1, 6):
@@ -1097,7 +1099,6 @@ func customer_left_table(c, angry: bool) -> void:
 		sfx.play("angry", -4.0)
 		if c.wants_order():
 			stats.angry_order += 1
-		_change_rep(-4.0 if critic_today else -2.0)
 		_float_text(c.position + Vector2(0, -50), "等太久，气走了！", Color("ff7b6b"))
 		_log("一位%s等得不耐烦，拂袖而去。" % c.gtype.name)
 	elif t.plate != "":
@@ -1116,6 +1117,20 @@ func _change_rep(amount: float) -> void:
 	reputation = clampf(reputation + amount, 0.0, 100.0)
 
 
+## 营业声望每天打烊统一结算：看当天平均满意度和气走的比例，单日最多 +1.2、-1.5。
+## 这样一天来 20 位还是 50 位客人，声望都不会暴涨暴跌。美食家来的那天影响 ×1.25。
+func _daily_rep() -> void:
+	var n: int = stats.served + stats.angry
+	if n <= 0:
+		return
+	var avg_sat: float = stats.sat_sum / maxf(stats.served, 1.0)
+	var angry_rate := float(stats.angry) / n
+	var r := (1.2 + 4.0 * (avg_sat - 0.55) - 10.0 * angry_rate) * minf(1.0, n / 20.0)
+	if critic_today:
+		r *= 1.25
+	_change_rep(clampf(r, -1.5, 1.2))
+
+
 # ---------------- 一天的开始与结束 ----------------
 
 func _reset_day_stats() -> void:
@@ -1126,6 +1141,7 @@ func _reset_day_stats() -> void:
 
 func _start_game() -> void:
 	game_started = true
+	week_cash_start = money
 	sfx.play("gong", -4.0)
 	sfx.voice("open")
 	if autotest:
@@ -1134,7 +1150,7 @@ func _start_game() -> void:
 			lengths.append("%s=%.2fs" % [k, sfx._streams[k].get_length()])
 		print("[autotest] sounds: ", ", ".join(lengths), " | voices: ", sfx._voices.keys())
 	_log("云来客栈开张啦！")
-	_set_speed(8.0 if autotest or autoplay_weeks > 0 else 1.0)
+	_set_speed(32.0 if autoplay_weeks > 0 else (8.0 if autotest else 1.0))
 
 
 func _end_day() -> void:
@@ -1153,6 +1169,9 @@ func _end_day() -> void:
 		t.plate = ""
 	for w in staff:
 		w.reset_work()
+	_book("工钱", -wages)
+	_book("租金", -RENT)
+	_daily_rep()
 	var notes := _daily_growth()
 	var spoiled := PackedStringArray()  # 菜蔬、河鲜放不住，每天坏掉一些
 	for k in food.size():
@@ -1194,6 +1213,10 @@ func _end_day() -> void:
 			_date_text(), stats.visitors, stats.served, stats.angry, stats.lost_full, stats.lost_price,
 			stats.income, _food_total(), money, reputation, stats.slacks, staff.size()])
 	_refresh_ui()
+	if money < 0 and autoplay_weeks > 0:
+		print("[play] BANKRUPT at %s money=%d" % [_date_text(), money])
+		get_tree().quit()
+		return
 	if money < 0:
 		var e: Dictionary = Data.ENDINGS["annexed" if rivals[1].open else "sold"]
 		_show_popup(e.title, body + "\n\n账上亏空 %d 文。" % -money + e.text, "重新开始", _restart)
@@ -1283,10 +1306,12 @@ func _enter_rest_day(week_summary := "") -> void:
 		if _regular_at(3, 0):
 			tax /= 2
 		money -= tax
+		_book("税与失窃", -tax)
 		notes.append("这一季的税银 %d 文交到了县衙%s。" % [tax, "（赵捕头帮着说情，减了一半）" if _regular_at(3, 0) else ""])
 	if money > 0 and randf() < Data.THEFT_CHANCE * pow(0.5, staff_of("杂役").size()):
 		var lost := int(money * randf_range(0.1, 0.2))
 		money -= lost
+		_book("税与失窃", -lost)
 		notes.append("夜里遭了贼，柜上丢了 %d 文！（杂役守夜能防贼）" % lost)
 		_log("夜里遭贼，丢了 %d 文。" % lost)
 	notes.append_array(_update_rivals())
@@ -1691,16 +1716,21 @@ func _auto_restock() -> String:
 		return ""
 	var bought := PackedStringArray()
 	var short := false
+	var used := {}  # 已解锁的菜用得到哪几类食材
+	for d in dishes:
+		if d.unlocked:
+			used[int(d.food)] = true
 	for k in food.size():
 		var need: int = auto_food_target[k] - food[k]
-		if need <= 0:
+		if need <= 0 or not used.has(k):
 			continue
-		var amount := mini(need, int(maxi(money, 0) / _food_mult(k)))
+		var amount := mini(need, int(maxi(money - CASH_RESERVE, 0) / _food_mult(k)))
 		if amount < need:
 			short = true
 		if amount <= 0:
 			continue
 		money -= _food_cost(k, amount)
+		_book("食材", -_food_cost(k, amount))
 		food[k] += amount
 		bought.append("%s %d" % [Data.FOOD_KINDS[k].name, amount])
 	if bought.is_empty():
@@ -1762,6 +1792,7 @@ func _buy_food(k: int, amount: int) -> void:
 	if not is_rest_day or money < cost:
 		return
 	money -= cost
+	_book("食材", -cost)
 	food[k] += amount
 	_log("在粮行进了 %d %s，花了 %d 文。" % [amount, Data.FOOD_KINDS[k].name, cost])
 	_refresh_ui()
@@ -1772,6 +1803,7 @@ func _rush_food(k: int) -> void:
 	if is_rest_day or money < cost:
 		return
 	money -= cost
+	_book("食材", -cost)
 	food[k] += RUSH_FOOD
 	stats.food_bought += cost
 	stats.food_warned = false
@@ -1811,6 +1843,7 @@ func _hire_candidate(i: int) -> void:
 		if role == "":
 			return
 	money -= int(cand.fee)
+	_book("招人", -int(cand.fee))
 	cand["hired"] = true
 	var info := {"name": cand.name, "role": role, "stats": cand.stats.duplicate(), "wage": cand.wage,
 		"color": STAFF_COLORS[role].pick_random(), "sash": cand.sash, "look": cand.look, "trait": cand.trait}
@@ -1847,6 +1880,7 @@ func _buy_table() -> void:
 	if not is_rest_day or c.x < 0 or money < cost:
 		return
 	money -= cost
+	_book("店面", -cost)
 	pieces.append(c)
 	_rebuild_seats()
 	_log("木工坊送来一张长方桌，现在有 %d 个座位。" % tables.size())
@@ -1861,6 +1895,7 @@ func _expand() -> void:
 	if money < int(e.cost):
 		return
 	money -= int(e.cost)
+	_book("店面", -int(e.cost))
 	expand_level += 1
 	_log("大堂扩建：%s，能摆更多桌子了。" % e.name)
 	_refresh_ui()
@@ -1887,6 +1922,7 @@ func _upgrade_tables() -> void:
 	if money < int(g.cost):
 		return
 	money -= int(g.cost)
+	_book("店面", -int(g.cost))
 	table_level += 1
 	_log("桌椅换成了%s。" % g.name)
 	_refresh_ui()
@@ -1900,6 +1936,7 @@ func _upgrade_stove() -> void:
 	if money < int(g.cost):
 		return
 	money -= int(g.cost)
+	_book("店面", -int(g.cost))
 	stove_level += 1
 	_log("后厨砌了%s，出菜更快了。" % g.name)
 	_refresh_ui()
@@ -1913,6 +1950,7 @@ func _upgrade_counter() -> void:
 	if money < int(g.cost):
 		return
 	money -= int(g.cost)
+	_book("店面", -int(g.cost))
 	counter_level += 1
 	_log("柜台换成了%s，结账更快了。" % g.name)
 	_refresh_ui()
@@ -1945,6 +1983,7 @@ func _buy_ornament(id: String) -> void:
 			if slot < 0 or money < int(it.cost):
 				return
 			money -= int(it.cost)
+			_book("店面", -int(it.cost))
 			ornaments[id] = slot
 			_log("木工坊送来了%s。" % it.name)
 	_refresh_ui()
@@ -1968,6 +2007,7 @@ func _buy_decor() -> void:
 	if money < cost:
 		return
 	money -= cost
+	_book("店面", -cost)
 	decor_level += 1
 	_log("装修升级为「%s」。" % DECOR_NAMES[decor_level])
 	_refresh_ui()
@@ -1994,6 +2034,7 @@ func _start_research(d: Dictionary) -> void:
 	if research != null or d.unlocked or money < int(d.research_cost):
 		return
 	money -= int(d.research_cost)
+	_book("研发", -int(d.research_cost))
 	research = {"dish": d, "points": 0.0}
 	_log("厨师们开始琢磨新菜「%s」。" % d.name)
 	_refresh_ui()
@@ -2035,6 +2076,7 @@ func _sign_contest() -> void:
 		return
 	var c: Dictionary = Data.CONTESTS[contest_idx]
 	money -= int(c.fee)
+	_book("比赛", -int(c.fee))
 	contest_active = true
 	contest_days = 0
 	contest_value = 0.0
@@ -2057,6 +2099,7 @@ func _finish_contest() -> String:
 	var line := "比赛「%s」结束：%s。" % [c.name, _contest_progress_text()]
 	if contest_value >= float(c.target):
 		money += int(c.prize)
+		_book("比赛", int(c.prize))
 		reputation = minf(100.0, reputation + 5.0)
 		contest_idx += 1
 		_log("赢下「%s」，奖金 %d 文！" % [c.name, c.prize])
@@ -2069,8 +2112,10 @@ func _finish_contest() -> String:
 
 # ---------------- 访客事件 ----------------
 
+## 有选项的事件（弹窗，等你拿主意）每天 35%；没选项的天灾（走水、大雪）每天 12%，只飘字记日志、不打断。
 func _schedule_event() -> void:
-	event_hour = randf_range(9.5, 17.0) if randf() < 0.6 else -1.0
+	event_hour = randf_range(9.5, 17.0) if randf() < 0.35 else -1.0
+	mishap_hour = randf_range(9.5, 17.0) if randf() < 0.12 else -1.0
 
 
 func _trigger_random_event() -> void:
@@ -2081,12 +2126,22 @@ func _trigger_random_event() -> void:
 		if ev.id == "scholar" and scholar_loan:
 			continue
 		options.append(ev)
-	if randf() < 0.4:  # 官府与天灾
-		options.clear()
-		for ev in Data.DISASTERS:
-			if not ev.has("season") or int(ev.season) == season_of_week(week()):
-				options.append(ev)
+	options.append(Data.DISASTERS[0])  # 官府查店有选项，混在普通访客里
 	_trigger_event(options.pick_random())
+
+
+## 没选项的天灾：直接生效，飘字 + 日志，不弹窗。
+func _trigger_mishap() -> void:
+	var options: Array = []
+	for ev in Data.DISASTERS:
+		if ev.no == "" and ev.id != last_mishap and (not ev.has("season") or int(ev.season) == season_of_week(week())):
+			options.append(ev)
+	if options.is_empty():
+		return
+	var ev: Dictionary = options.pick_random()
+	last_mishap = ev.id
+	_float_text(Vector2(450, 300), "【%s】" % ev.title, Color("ffb070"))
+	_event_accept(ev)
 
 
 func _trigger_event(ev: Dictionary) -> void:
@@ -2106,6 +2161,7 @@ func _event_accept(ev: Dictionary) -> void:
 		_event_decline(ev)
 		return
 	money -= cost
+	_book("事件", -cost)
 	match ev.id:
 		"storyteller":
 			today_patience *= 0.7
@@ -2135,6 +2191,7 @@ func _event_accept(ev: Dictionary) -> void:
 				_log("火扑灭了，只烧了些柴米。")
 			else:
 				money -= 400
+				_book("事件", -400)
 				today_arrival *= 0.5
 				_change_rep(-2.0)
 				_log("火势太大，灶台烧坏了，修灶花了 400 文，客人也吓跑了一半。（有杂役能更快扑灭）")
@@ -2720,7 +2777,7 @@ func _draw_tables() -> void:
 	# 没扩建的地方：堆着杂物，暗下去
 	var e: Dictionary = Data.EXPANSIONS[expand_level]
 	for r in range(1, 8):
-		for c in GCOLS:
+		for c in range(1, GCOLS - 1):  # 最靠墙的两列留给摆件和灯笼，不堆杂物
 			if c >= int(e.cols[0]) and c <= int(e.cols[1]):
 				continue
 			var cc := cell_center(Vector2i(c, r))
@@ -3941,6 +3998,12 @@ func _shot(shot_name: String) -> void:
 
 var autoplay_weeks := 0
 var week_sum := {}  # 本周累计
+var ledger := {}  # 本周现金流水，按类别
+var week_cash_start := 0
+
+
+func _book(cat: String, amount: int) -> void:
+	ledger[cat] = int(ledger.get(cat, 0)) + amount
 
 
 func _autoplay_day_end() -> void:
@@ -3971,50 +4034,55 @@ func _autoplay_tick() -> void:
 			_rush_food(k)
 
 
-## 休假日按优先级办事，然后开张。
+## 休假日按优先级办事（花完都至少留 CASH_RESERVE 周转），办完打印这一周的账，然后开张。
 func _autoplay_rest_day() -> void:
 	await get_tree().process_frame
-	var r := {"week": week(), "money": money, "rep": int(reputation), "seats": tables.size(), "staff": staff.size(),
-		"ch": chapter, "contest": contest_idx, "expand": expand_level, "decor": decor_level}
 	var w := week_sum
-	print("[play] W%02d %s money=%d rep=%d seats=%d staff=%d | visitors=%d served=%d full=%d angry=%d priceleave=%d income=%d sat=%d%% | ch=%d contest=%d expand=%d decor=%d tbl=%d stove=%d | rivals=%s" % [
-		r.week, season().name, money, r.rep, r.seats, r.staff, w.get("visitors", 0), w.get("served", 0), w.get("lost_full", 0),
-		w.get("angry", 0), w.get("lost_price", 0), w.get("income", 0), int(float(w.get("sat", 0.0)) / maxf(1.0, float(w.get("served", 0))) * 100.0),
-		chapter, contest_idx, expand_level, decor_level, table_level, stove_level,
-		rivals.map(func(x): return "%d%s" % [int(x.rep), "" if x.open else ("x" if x.closed else "-")])])
+	var full_rate := float(w.get("lost_full", 0)) / maxf(1.0, float(w.get("served", 0)) + float(w.get("angry", 0)) + float(w.get("lost_full", 0)))
+	# 1. 桌子优先：不到 8 座就每个休假日买一张；8 座以后看上周客满流失
+	var c := _free_piece_cell()
+	if c.x >= 0 and money - _table_cost() >= CASH_RESERVE and (tables.size() < 8 or full_rate > 0.3):
+		_buy_table()
+	if _free_piece_cell().x < 0 and expand_level < Data.EXPANSIONS.size() - 1 and money - int(Data.EXPANSIONS[expand_level + 1].cost) >= CASH_RESERVE and full_rate > 0.3:
+		_expand()
+	# 2. 缺人就招：跑堂按座位配，厨师按座位配
+	var want := {"跑堂": maxi(1, tables.size() / 5), "厨师": maxi(1, tables.size() / 6), "杂役": 1 if tables.size() >= 8 else 0, "掌柜": 1}
+	for i in market.size():
+		var cand: Dictionary = market[i]
+		if not cand.get("hired", false) and staff_of(cand.role).size() < int(want.get(cand.role, 0)) and money - int(cand.fee) >= CASH_RESERVE:
+			_hire_candidate(i)
+	# 3. 研发
+	if research == null:
+		for ci in Data.CATEGORIES.size():
+			var d = _next_locked(ci)
+			if d != null and money - int(d.research_cost) >= CASH_RESERVE + 500:
+				_start_research(d)
+				break
+	# 4. 升级：灶台 > 桌椅 > 柜台 > 装修
+	for pair in [[Data.STOVE_GRADES, stove_level, _upgrade_stove], [Data.TABLE_GRADES, table_level, _upgrade_tables], [Data.COUNTER_GRADES, counter_level, _upgrade_counter]]:
+		if int(pair[1]) < pair[0].size() - 1 and money - int(pair[0][int(pair[1]) + 1].cost) >= CASH_RESERVE * 2:
+			pair[2].call()
+	if decor_level < DECOR_COSTS.size() and money - int(DECOR_COSTS[decor_level]) >= CASH_RESERVE * 2:
+		_buy_decor()
+	# 5. 比赛
+	if _contest_block_reason() == "" and money - int(Data.CONTESTS[contest_idx].fee) >= CASH_RESERVE:
+		_sign_contest()
+	# 周报：本周现金流（期初 → 期末，各类相加，对不上的部分记「其他」）
+	var known := 0
+	for k in ledger:
+		known += int(ledger[k])
+	ledger["其他"] = money - week_cash_start - known
+	print("[play] W%02d %s cash %d->%d rep=%d seats_next=%d staff=%d | visit=%d served=%d full=%d(%d%%) angry=%d price=%d sat=%d%% | ch=%d contest=%d exp=%d decor=%d tbl=%d stove=%d ctr=%d | rivals=%s | %s" % [
+		week(), season().name, week_cash_start, money, int(reputation), tables.size(), staff.size(),
+		w.get("visitors", 0), w.get("served", 0), w.get("lost_full", 0), int(full_rate * 100.0), w.get("angry", 0), w.get("lost_price", 0),
+		int(float(w.get("sat", 0.0)) / maxf(1.0, float(w.get("served", 0))) * 100.0),
+		chapter, contest_idx, expand_level, decor_level, table_level, stove_level, counter_level,
+		rivals.map(func(x): return "%d%s" % [int(x.rep), "" if x.open else ("x" if x.closed else "-")]), str(ledger)])
 	week_sum = {}
+	ledger = {}
+	week_cash_start = money
 	if week() >= autoplay_weeks:
 		print("[play] done")
 		get_tree().quit()
 		return
-	# 1. 缺人就招：跑堂按座位数配，没有杂役先招一个
-	var want := {"跑堂": maxi(1, tables.size() / 5), "厨师": maxi(1, tables.size() / 6), "杂役": 1, "掌柜": 1}
-	for i in market.size():
-		var cand: Dictionary = market[i]
-		if not cand.get("hired", false) and staff_of(cand.role).size() < int(want.get(cand.role, 0)) and money > int(cand.fee) + 800:
-			_hire_candidate(i)
-	# 2. 研发
-	if research == null:
-		for ci in Data.CATEGORIES.size():
-			var d = _next_locked(ci)
-			if d != null and money > int(d.research_cost) * 2 + 800:
-				_start_research(d)
-				break
-	# 3. 店面：桌子 > 扩建 > 灶台 > 桌椅 > 柜台 > 装修，都留够周转
-	for _k in 3:
-		if _free_piece_cell().x >= 0 and money > _table_cost() * 3 + 1000:
-			_buy_table()
-	if expand_level < Data.EXPANSIONS.size() - 1 and _free_piece_cell().x < 0 and money > int(Data.EXPANSIONS[expand_level + 1].cost) + 1500:
-		_expand()
-	if stove_level < Data.STOVE_GRADES.size() - 1 and money > int(Data.STOVE_GRADES[stove_level + 1].cost) * 2 + 1000:
-		_upgrade_stove()
-	if table_level < Data.TABLE_GRADES.size() - 1 and money > int(Data.TABLE_GRADES[table_level + 1].cost) * 2 + 1000:
-		_upgrade_tables()
-	if counter_level < Data.COUNTER_GRADES.size() - 1 and money > int(Data.COUNTER_GRADES[counter_level + 1].cost) * 2 + 1000:
-		_upgrade_counter()
-	if decor_level < DECOR_COSTS.size() and money > int(DECOR_COSTS[decor_level]) * 2 + 1000:
-		_buy_decor()
-	# 4. 比赛
-	if _contest_block_reason() == "" and money > int(Data.CONTESTS[contest_idx].fee) * 2:
-		_sign_contest()
 	_end_rest_day()
