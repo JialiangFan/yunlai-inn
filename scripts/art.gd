@@ -14,7 +14,7 @@ const EXTS := [".png", ".webp", ".jpg"]
 var _cache := {}
 
 
-## 按相对路径（不带扩展名）取图，比如 "furniture/table"。
+## 按相对路径（不带扩展名）取图，比如 "furniture/rtable_0"。
 func tex(key: String) -> Texture2D:
 	if _cache.has(key):
 		return _cache[key]

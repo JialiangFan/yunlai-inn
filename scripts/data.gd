@@ -40,6 +40,14 @@ const ITEMS := [
 ]
 
 # ---------------- 店面装修 ----------------
+# 扩建：大堂一开始只用中间一块，其余是堆杂物的地方。cols / rows 是能摆桌子的格子范围（含两端）。
+# 大堂是 17 x 10 的网格，每格 50 像素；第 0 行是传菜道，第 8、9 行是门口和柜台。
+const EXPANSIONS := [
+	{"name": "小店", "cost": 0, "cols": [5, 11], "rows": [2, 4]},
+	{"name": "打通东西厢", "cost": 2500, "cols": [3, 13], "rows": [2, 5]},
+	{"name": "大堂全开", "cost": 6000, "cols": [1, 15], "rows": [2, 6]},
+]
+
 # 桌椅档次：满意度加成
 const TABLE_GRADES := [
 	{"name": "松木桌", "cost": 0, "sat": 0.0},
@@ -242,11 +250,11 @@ const DISASTERS := [
 # ---------------- 比赛 ----------------
 # 依次参加。休假日报名，下一周六个营业日比成绩，达到目标即获胜。
 const CONTESTS := [
-	{"name": "城南小吃评比", "fee": 300, "rep": 0, "tables": 3, "type": "served", "target": 100, "prize": 1500},
-	{"name": "县城厨艺会", "fee": 800, "rep": 30, "tables": 5, "type": "income", "target": 7000, "prize": 4000},
-	{"name": "府城名店赛", "fee": 2000, "rep": 55, "tables": 6, "type": "satisfaction", "target": 72, "prize": 8000},
-	{"name": "省城食府大会", "fee": 4000, "rep": 75, "tables": 7, "type": "income", "target": 22000, "prize": 15000},
-	{"name": "天下名厨大会", "fee": 8000, "rep": 95, "tables": 8, "type": "fine", "target": 60, "prize": 30000},
+	{"name": "城南小吃评比", "fee": 300, "rep": 0, "tables": 4, "type": "served", "target": 100, "prize": 1500},
+	{"name": "县城厨艺会", "fee": 800, "rep": 30, "tables": 8, "type": "income", "target": 7000, "prize": 4000},
+	{"name": "府城名店赛", "fee": 2000, "rep": 55, "tables": 10, "type": "satisfaction", "target": 72, "prize": 8000},
+	{"name": "省城食府大会", "fee": 4000, "rep": 75, "tables": 14, "type": "income", "target": 22000, "prize": 15000},
+	{"name": "天下名厨大会", "fee": 8000, "rep": 95, "tables": 18, "type": "fine", "target": 60, "prize": 30000},
 ]
 const CONTEST_TYPES := {
 	"served": "一周招待的客人数",

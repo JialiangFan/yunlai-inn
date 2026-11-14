@@ -23,9 +23,14 @@
   像素画推荐原图 16x24、32x48 这类比例。
 
 【家具】art/furniture/
-  table.png       桌子，画成 68x68 像素（正方形）
-  stool.png       凳子，画成 26x26 像素
-  floor.png       大堂地板，会平铺铺满大堂，做成能无缝拼接的一块
+  rtable_0/1/2.png  长方桌（松木/红木/雕花红木），正上方俯视，宽高比约 3:2，
+                    左右两端不留空（几张并排会连成长桌）。显示 50x36 像素
+  chair_0/1/2.png   配套的椅子，显示 28x28 像素
+  counter_0/1.png   柜台（普通/雕花描金），显示宽 160 像素
+  floor.png, floor_1/2/3.png  四档装修的地板，无缝平铺
+  lantern.png, palace_lantern.png, bonsai.png  灯笼、宫灯、盆景
+  screen/scroll/fish/flower/curio/censer.png   地上的摆件
+  wall_landscape/flower/calligraphy/tiger.png  墙上的字画
 
 【菜】art/dishes/              文件名用菜名，例如：
   阳春面.png  小笼包.png  麻婆豆腐.png  北京烤鸭.png …

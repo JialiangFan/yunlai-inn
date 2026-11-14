@@ -167,9 +167,9 @@ func _draw() -> void:
 			_bubble(o + Vector2(0, -66), dish.name, Color("3b2a1a"))
 			_patience_bar(o + Vector2(0, -48))
 		S.EATING:
-			# 筷子：从嘴边伸到桌上的碗里，夹一口再送回来（碗在桌子中心偏左，座位在桌子左边 46 像素）
+			# 筷子：从嘴边伸到桌上的碗里，夹一口再送回来
 			var mouth := o + Vector2(5, -24)
-			var bowl := o + Vector2(36, -4)
+			var bowl: Vector2 = o + (main.plate_pos(table_idx) - position)  # 自己面前那份菜
 			var tip := mouth.lerp(bowl, reach)
 			var base := (o + Vector2(14, -12)).lerp(o + Vector2(24, -8), reach)
 			draw_line(base, tip, Color("3b2416"), 2.4)
