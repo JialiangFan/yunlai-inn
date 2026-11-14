@@ -199,13 +199,13 @@ func _ready() -> void:
 	font = SystemFont.new()
 	font.font_names = PackedStringArray([
 		"Microsoft YaHei UI", "Microsoft YaHei", "SimHei",  # Windows
-		"PingFang SC", "Hiragino Sans GB", "Heiti SC",  # Mac
+		"Hiragino Sans GB", "Heiti SC",  # Mac（PingFang SC 能找到但 Godot 加载失败，别加）
 		"Noto Sans CJK SC", "WenQuanYi Micro Hei", "sans-serif"])  # Linux
 	title_font = SystemFont.new()
 	title_font.font_names = PackedStringArray([
 		"KaiTi", "楷体",  # Windows
 		"Kaiti SC", "STKaiti", "Songti SC",  # Mac
-		"AR PL UKai CN", "Microsoft YaHei UI", "PingFang SC", "sans-serif"])
+		"AR PL UKai CN", "Microsoft YaHei UI", "Hiragino Sans GB", "sans-serif"])
 	title_font.font_weight = 700
 	texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED  # 地板图平铺要用
 	sfx = Sfx.new()
