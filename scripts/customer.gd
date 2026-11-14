@@ -45,6 +45,7 @@ func _process(delta: float) -> void:
 		S.WALK_IN:
 			if step_walk(delta):
 				state = S.WANT_ORDER
+				facing = 1.0  # 座位在桌子左边，面朝桌子
 				patience_max = ORDER_PATIENCE * float(gtype.patience)
 				patience = patience_max
 				main.request_order(self)

@@ -143,6 +143,7 @@ func _run_step(delta: float) -> void:
 		if step_walk(delta):
 			steps.pop_front()
 	else:
+		facing = s.get("face", facing)  # 在桌边干活时面朝桌子（桌子在左边）
 		wait_timer += delta
 		if wait_timer >= _step_time(s):
 			wait_timer = 0.0

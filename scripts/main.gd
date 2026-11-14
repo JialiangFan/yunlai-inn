@@ -771,7 +771,7 @@ func build_steps(w, t: Dictionary) -> Array:
 		"order":
 			return [
 				{"move": serve_pos(ti)},
-				{"wait": 0.8, "do": _take_order.bind(w, t.customer), "anim": "write"},
+				{"wait": 0.8, "do": _take_order.bind(w, t.customer), "anim": "write", "face": -1.0},
 				{"move": PICKUP_POS},
 				{"wait": 0.3, "do": _hand_to_kitchen.bind(w)},
 			]
@@ -780,12 +780,12 @@ func build_steps(w, t: Dictionary) -> Array:
 				{"move": PICKUP_POS},
 				{"wait": 0.3, "do": _pick_up.bind(w, t.order)},
 				{"move": serve_pos(ti)},
-				{"wait": 0.4, "do": _serve.bind(w, t.order)},
+				{"wait": 0.4, "do": _serve.bind(w, t.order), "face": -1.0},
 			]
 		"clean":
 			return [
 				{"move": serve_pos(ti)},
-				{"wait": 1.0, "do": _clean_table.bind(ti), "anim": "wipe"},
+				{"wait": 1.0, "do": _clean_table.bind(ti), "anim": "wipe", "face": -1.0},
 			]
 	return []
 

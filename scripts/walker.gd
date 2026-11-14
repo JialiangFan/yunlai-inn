@@ -7,6 +7,8 @@ const HAIR := Color("2a1d14")
 var main
 var speed := 120.0
 var path: Array = []
+var facing := 1.0  # 1 朝右，-1 朝左（图片左右翻转）
+var walk_phase := 0.0  # 走路的步子相位，走起来才涨
 
 
 func walk_to(dest: Vector2) -> void:
@@ -19,6 +21,9 @@ func step_walk(delta: float) -> bool:
 	while remaining > 0.0 and not path.is_empty():
 		var p: Vector2 = path[0]
 		var dist := position.distance_to(p)
+		if absf(p.x - position.x) > 1.0:
+			facing = signf(p.x - position.x)
+		walk_phase += minf(dist, remaining) / 14.0  # 大约每 14 像素迈一步
 		if dist <= remaining:
 			position = p
 			remaining -= dist
@@ -43,8 +48,16 @@ func draw_sprite(o: Vector2, t: Texture2D, height := 58.0) -> bool:
 		return false
 	var sz := t.get_size()
 	var w := sz.x * height / sz.y
-	ellipse(Vector2(0, 14), 13.0, 4.5, Color(0, 0, 0, 0.22))
-	draw_texture_rect(t, Rect2(o + Vector2(-w / 2.0, 15.0 - height), Vector2(w, height)), false)
+	var step := sin(walk_phase * PI) if is_walking() else 0.0  # 左右脚交替
+	ellipse(Vector2(0, 14), 13.0 - absf(step) * 2.0, 4.5, Color(0, 0, 0, 0.22))
+	if is_walking():  # 脚下扬起一点尘土
+		var dust := fmod(walk_phase, 1.0)
+		disc(Vector2(-facing * (6.0 + dust * 8.0), 13.0 - dust * 4.0), 2.0 + dust * 2.0, Color(0.8, 0.7, 0.55, 0.35 * (1.0 - dust)))
+	# 以脚底为轴：走路时身体左右摇摆、一颠一颠，朝哪边走就翻向哪边
+	var lift := absf(step) * 3.0
+	draw_set_transform(o + Vector2(0, 15.0 - lift), step * 0.08, Vector2(facing, 1.0))
+	draw_texture_rect(t, Rect2(Vector2(-w / 2.0, -height), Vector2(w, height)), false)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	return true
 
 
