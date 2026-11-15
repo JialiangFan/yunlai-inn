@@ -8,6 +8,7 @@ const Worker = preload("res://scripts/worker.gd")
 const FloatText = preload("res://scripts/float_text.gd")
 const Art = preload("res://scripts/art.gd")
 const Sfx = preload("res://scripts/sfx.gd")
+const DialogBox = preload("res://scripts/dialog_box.gd")
 
 # ---------------- 经营数值 ----------------
 const START_MONEY := 2000
@@ -62,7 +63,9 @@ const STAFF_COLORS := {
 
 const TASK_PRIORITY := {"deliver": 0, "order": 1, "clean": 2}
 
-const INTRO_TEXT := "【第一章 · 重振祖业】\n父亲走得急，只给你留下城南这间旧客栈，还有一个掌柜、一个厨师、一个跑堂。对街的福满楼正等着看笑话。\n本章目标：声望达到 30。\n\n每周营业六天，伙计们自己干活，你看着大堂、应付上门的访客；第七天是休假日，可以进城：粮行进货、人力市场招人、木工坊添桌装修、杂货铺给伙计买东西，还能报名参加厨艺比赛。\n\n伙计各有能力：厨艺、计算、技巧、反应决定干活快慢，魅力招揽客人，毅力低的会偷懒，向心力低的会辞工。\n\n一路赢下五场比赛，云来客栈就能名扬天下！\n\n快捷键：空格 暂停/继续，1 / 2 / 3 切换速度"
+const INTRO_TEXT := "城南青石街尽头，有一间挂了三十年招牌的老客栈。\n父亲走后，它落到了你的手里。\n\n经营客栈、招揽伙计、研发新菜、赢下五场厨艺大赛——\n让云来客栈名扬天下！"
+# 第一章开始前的说明（开场对话之后弹出）
+const CHAPTER1_HELP := "\n\n伙计各有能力：厨艺、计算、技巧、反应决定干活快慢，魅力招揽客人，毅力低的会偷懒，向心力低的会辞工。\n\n快捷键：空格 暂停/继续，1 / 2 / 3 切换速度；对话中点击或按空格翻页，Esc 跳过"
 
 # ---------------- 场景布局 ----------------
 const KITCHEN_RECT := Rect2(20, 70, 860, 110)
@@ -250,6 +253,7 @@ var popup_button: Button
 var popup_button2: Button
 var popup_action := Callable()
 var popup_action2 := Callable()
+var dialog  # 剧情对话框（dialog_box.gd）
 var ui_refresh_timer := 0.0
 
 
@@ -322,9 +326,9 @@ func _ready() -> void:
 		day = 6
 		_enter_rest_day()
 	elif not autotest and FileAccess.file_exists(_save_path()):
-		_show_popup("云来客栈", INTRO_TEXT, "重新开张", _start_game, "读取存档", _load_game)
+		_show_popup("云来客栈", INTRO_TEXT, "重新开张", _new_game_intro, "读取存档", _load_game)
 	else:
-		_show_popup("云来客栈", INTRO_TEXT, "开张营业", _start_game)
+		_show_popup("云来客栈", INTRO_TEXT, "开张营业", _new_game_intro)
 
 
 func _init_dishes() -> void:
@@ -414,7 +418,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if s != "":
 				_open_shop(s)
 	var k := event as InputEventKey
-	if k == null or not k.pressed or k.echo or not game_started or popup.visible:
+	if k == null or not k.pressed or k.echo or not game_started or popup.visible or dialog.visible:
 		return
 	match k.keycode:
 		KEY_SPACE:
@@ -1174,6 +1178,75 @@ func _reset_day_stats() -> void:
 		"rep_start": reputation, "food_warned": false}
 
 
+## 新开局：先演开场戏，再问要不要听经营要诀，最后弹出第一章说明、开张。
+func _new_game_intro() -> void:
+	_play_dialog(Data.PROLOGUE, func():
+		_show_popup("经营要诀", "要不要听掌柜讲讲经营要诀？\n（听完有一点小奖励）", "听一听", _hear_tips, "直接开张", _chapter1_popup))
+
+
+func _hear_tips() -> void:
+	_play_dialog(Data.TIPS, func():
+		money += Data.TIPS_REWARD  # 开张前的本钱，不记进账本（开张时才开始记）
+		_log("掌柜交来老东家的压箱钱 %d 文。" % Data.TIPS_REWARD)
+		_refresh_ui()
+		_chapter1_popup())
+
+
+func _chapter1_popup() -> void:
+	var c: Dictionary = Data.CHAPTERS[0]
+	_show_popup(c.title, c.text + "\n\n本章目标：" + c.goal + CHAPTER1_HELP, "开张营业", _start_game)
+
+
+## 把 Data 里的台词换成能演的样子：职位换成店里伙计的名字和头像。
+func _dialog_lines(raw: Array) -> Array:
+	var out: Array = []
+	for ln in raw:
+		var who: String = ln.s
+		var pic: Texture2D = null
+		var col := Color("6a5a48")
+		if Data.ROLES.has(who):
+			var ws := staff_of(who)
+			if not ws.is_empty():
+				pic = art.staff(who, int(ws[0].info.get("look", 0)))
+				who = ws[0].info.name
+			col = Color(Data.ROLE_COLOR[ln.s])
+		elif who == "钱东家":
+			pic = art.tex("portraits/rival_boss")
+		elif who == "你":
+			who = "东家"
+			col = Color("8c2f39")
+		elif who == "旁白":
+			col = Color("3d4f6e")
+		out.append({"who": who, "pic": pic, "color": col, "text": ln.t})
+	return out
+
+
+## 演一段对话，演完调 done。对话期间游戏暂停。
+func _play_dialog(raw: Array, done: Callable) -> void:
+	if raw.is_empty() or autoplay_weeks > 0:
+		done.call()
+		return
+	Engine.time_scale = 0.0
+	sfx.set_sizzle(false)
+	dialog.play(_dialog_lines(raw), func():
+		if not popup.visible:
+			Engine.time_scale = speed
+		done.call())
+	if autotest:
+		_autotest_dialog.call_deferred()
+
+
+func _autotest_dialog() -> void:
+	if not auto_done.has("shot_dialog"):
+		auto_done["shot_dialog"] = true
+		await get_tree().create_timer(1.2, true, false, true).timeout  # 等字打出来一些（不受暂停影响）
+		await _shot("dialog")
+		print("[autotest] dialog: ", dialog.name_lbl.text, " / ", dialog.text_lbl.text.left(20))
+	else:
+		await get_tree().process_frame
+	dialog.skip_all()
+
+
 func _start_game() -> void:
 	game_started = true
 	week_cash_start = money
@@ -1470,7 +1543,8 @@ func _after_rest_popup() -> void:
 			title = nx.title
 			text += "\n\n" + nx.text + "\n\n本章目标：" + nx.goal
 		_log("%s完成。" % done.title)
-		_show_popup(title, text, "继续", _after_rest_popup)
+		var clear_lines: Array = Data.CHAPTER_CLEAR[chapter - 1] if chapter - 1 < Data.CHAPTER_CLEAR.size() else []
+		_play_dialog(clear_lines, _show_popup.bind(title, text, "继续", _after_rest_popup))
 		return
 	if _story_due():
 		var ev: Dictionary = Data.STORY[story_step]
@@ -1478,8 +1552,9 @@ func _after_rest_popup() -> void:
 		var text: String = ev.text
 		if text.contains("%d"):
 			text = text % int(ev.cost)
-		popup_portrait_key = "portraits/rival_boss"
-		_show_popup(ev.title, text, ev.yes, _story_choice.bind(ev, true), ev.no, _story_choice.bind(ev, false))
+		_play_dialog(Data.STORY_LINES.get(ev.id, []), func():
+			popup_portrait_key = "portraits/rival_boss"
+			_show_popup(ev.title, text, ev.yes, _story_choice.bind(ev, true), ev.no, _story_choice.bind(ev, false)))
 		return
 	tabs.current_tab = 2
 	if autotest:
@@ -1915,6 +1990,12 @@ func _refresh_market() -> void:
 		var role: String = roles[i]
 		var info := _make_staff(role, randi_range(20, 65), randi_range(45, 75))
 		info["fee"] = 100 + int(info.stats[Data.ROLE_STAT[role]]) * 4
+		# 自我介绍：按本事分三档挑一句，五个里有一个会往高里吹一档
+		var skill: int = info.stats[Data.ROLE_STAT[role]]
+		var tier := 0 if skill >= 50 else (1 if skill >= 35 else 2)
+		if tier > 0 and randf() < 0.2:
+			tier -= 1
+		info["intro"] = Data.SELF_INTRO[role][tier].pick_random()
 		market.append(info)
 
 
@@ -3406,6 +3487,11 @@ func _build_ui() -> void:
 	popup_button2.add_theme_font_size_override("font_size", 17)
 	pb.add_child(popup_button2)
 
+	# 剧情对话框盖在所有界面上面
+	dialog = DialogBox.new()
+	root.add_child(dialog)
+	dialog.build(font, title_font)
+
 
 func _build_menu_tab() -> Control:
 	var list := VBoxContainer.new()
@@ -3767,7 +3853,7 @@ func _refresh_ui() -> void:
 			row.label.text = "%s 已经雇下了" % cand.name
 			row.button.disabled = true
 		else:
-			row.label.text = "%s　想当%s　工钱 %d 文/天\n签约费 %d 文　本事：雇了才知道" % [cand.name, cand.role, cand.wage, cand.fee]
+			row.label.text = "%s　想当%s　工钱 %d 文/天　签约费 %d 文\n「%s」（本事雇了才知道）" % [cand.name, cand.role, cand.wage, cand.fee, cand.get("intro", "……")]
 			row.button.disabled = not is_rest_day or money < int(cand.fee) or staff.size() >= MAX_STAFF
 	lbl_tables.text = "长方桌 %d 张，座位 %d 个（大堂：%s）" % [pieces.size(), tables.size(), Data.EXPANSIONS[expand_level].name]
 	if expand_level >= Data.EXPANSIONS.size() - 1:
@@ -4274,7 +4360,7 @@ func _set_speed(s: float) -> void:
 	speed = s
 	if s > 0.0:
 		last_speed = s
-	if not popup.visible:
+	if not popup.visible and not dialog.visible:
 		Engine.time_scale = s
 	for i in speed_buttons.size():
 		speed_buttons[i].set_pressed_no_signal(i == int(s))
