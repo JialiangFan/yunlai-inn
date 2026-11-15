@@ -111,6 +111,8 @@ var clock := 0.0
 var is_open := true
 var day_over := false
 var is_rest_day := false
+const REST_VISITS := 3  # 休假日能进几家铺子（每家耗一个时辰；比赛告示和回店不算）
+var rest_visited: Array = []  # 这个休假日进过的铺子，进过的当天都能接着办事
 var game_started := false
 var game_finished := false
 var decor_level := 0
@@ -199,6 +201,7 @@ var dish_rows: Array = []
 var staff_box: VBoxContainer
 var staff_rows: Array = []
 var lbl_town_status: Label
+var lbl_shop_visit: Label  # 店面页顶上：木工坊今天进没进
 var food_rows: Array = []  # 粮行每类食材一行：{"lbl", "buy": [按钮], "rush", "auto"}
 var market_rows: Array = []
 var settings_panel: PanelContainer
@@ -397,7 +400,19 @@ func _unhandled_input(event: InputEvent) -> void:
 	if is_rest_day and arranging and not popup.visible:
 		var mp := get_global_mouse_position()
 		var mbt := event as InputEventMouseButton
-		if mbt != null and mbt.button_index == MOUSE_BUTTON_LEFT:
+		var kk := event as InputEventKey
+		if _placing():  # 刚买的东西拿在手上：左键放下，右键或 Esc 退货
+			if mbt != null and mbt.pressed and mbt.button_index == MOUSE_BUTTON_LEFT:
+				if _drop(drag, mp):
+					_finish_placing()
+			elif (mbt != null and mbt.pressed and mbt.button_index == MOUSE_BUTTON_RIGHT) or (kk != null and kk.pressed and kk.keycode == KEY_ESCAPE):
+				_cancel_placing()
+			elif event is InputEventMouseMotion:
+				queue_redraw()
+			if mbt != null or kk != null:
+				get_viewport().set_input_as_handled()
+				return
+		elif mbt != null and mbt.button_index == MOUSE_BUTTON_LEFT:
 			if mbt.pressed:
 				drag = _pick_at(mp)
 			elif drag != null:
@@ -1224,14 +1239,16 @@ func _dialog_lines(raw: Array) -> Array:
 ## 演一段对话，演完调 done。对话期间游戏暂停。
 func _play_dialog(raw: Array, done: Callable) -> void:
 	if raw.is_empty() or autoplay_weeks > 0:
-		done.call()
+		if done.is_valid():
+			done.call()
 		return
 	Engine.time_scale = 0.0
 	sfx.set_sizzle(false)
 	dialog.play(_dialog_lines(raw), func():
 		if not popup.visible:
 			Engine.time_scale = speed
-		done.call())
+		if done.is_valid():
+			done.call())
 	if autotest:
 		_autotest_dialog.call_deferred()
 
@@ -1385,6 +1402,7 @@ func _start_next_day() -> void:
 
 
 func _enter_rest_day(week_summary := "") -> void:
+	rest_visited.clear()
 	_close_week_ledger()  # 先把这一周的账结了
 	day += 1
 	is_rest_day = true
@@ -1568,6 +1586,9 @@ func _after_rest_popup() -> void:
 func _toggle_arrange() -> void:
 	if not is_rest_day:
 		return
+	if _placing():  # 手上还拿着刚买的东西：就放在现在的位置
+		_finish_placing()
+		return
 	arranging = not arranging
 	drag = null
 	hover_shop = ""
@@ -1589,34 +1610,135 @@ func _pick_at(mp: Vector2):
 
 
 ## 松手：放到最近的同类空位；那里已经有东西就两个对调。
-func _drop(d: Dictionary, mp: Vector2) -> void:
-	if d.kind == "table":
-		var c := cell_of(mp)
-		var ps: Array = pieces.duplicate()
-		ps[d.i] = c
-		if not _in_area(c):
-			_float_text(mp, "那里还没扩建", Color("ffe2b0"))
-		elif ps.count(c) > 1:
-			_float_text(mp, "那儿已经有桌子了", Color("ffe2b0"))
-		elif not _layout_ok(ps):
-			_float_text(mp, "这样摆，伙计走不到座位", Color("ffe2b0"))
-		else:
-			pieces = ps
-			_rebuild_seats()
-		_refresh_ui()
-		return
+## 把拖着的桌子放到 c 格行不行；不行返回原因，行返回 ""。
+func _table_spot_problem(d: Dictionary, c: Vector2i) -> String:
+	var ps: Array = pieces.duplicate()
+	ps[d.i] = c
+	if not _in_area(c):
+		return "那里还没扩建"
+	if ps.count(c) > 1:
+		return "那儿已经有桌子了"
+	if not _layout_ok(ps):
+		return "这样摆，伙计走不到座位"
+	return ""
+
+
+## 拖着的摆件离哪个摆件位最近（够近才算），没有返回 -1。
+func _orn_slot_near(d: Dictionary, mp: Vector2) -> int:
 	var slots: Array = WALL_SLOTS if _is_wall(d.id) else DECOR_SLOTS
 	var best := -1
 	for s in slots.size():
 		if mp.distance_to(slots[s]) < 90.0 and (best < 0 or mp.distance_to(slots[s]) < mp.distance_to(slots[best])):
 			best = s
+	return best
+
+
+## 松手：放到鼠标下的格子 / 最近的摆件位；那里已经有摆件就两个对调。放成了返回 true。
+func _drop(d: Dictionary, mp: Vector2) -> bool:
+	if d.kind == "table":
+		var c := cell_of(mp)
+		var why := _table_spot_problem(d, c)
+		if why != "":
+			_float_text(mp, why, Color("ffe2b0"))
+			_refresh_ui()
+			return false
+		pieces[d.i] = c
+		_rebuild_seats()
+		_refresh_ui()
+		return true
+	var best := _orn_slot_near(d, mp)
 	if best < 0:
-		return
+		_float_text(mp, "挂画挂在墙上，摆件放在摆件位上" if _is_wall(d.id) else "放到大堂的摆件位上", Color("ffe2b0"))
+		return false
 	for id in ornaments:
 		if id != d.id and _is_wall(id) == _is_wall(d.id) and int(ornaments[id]) == best:
 			ornaments[id] = ornaments[d.id]
 	ornaments[d.id] = best
 	_refresh_ui()
+	return true
+
+
+## 拖东西时，鼠标底下的落点：能放画绿格，不能放画红格加叉。
+func _draw_drop_preview() -> void:
+	var mp := get_global_mouse_position()
+	if drag.kind == "table":
+		var c := cell_of(mp)
+		var ok := _table_spot_problem(drag, c) == ""
+		var r := Rect2(cell_center(c) - Vector2(CELL, CELL) / 2.0, Vector2(CELL, CELL))
+		var col := Color(0.3, 0.85, 0.35) if ok else Color(0.9, 0.2, 0.15)
+		draw_rect(r, Color(col, 0.28))
+		draw_rect(r, col, false, 2.5)
+		if not ok:
+			draw_line(r.position + Vector2(8, 8), r.end - Vector2(8, 8), col, 3.0)
+			draw_line(Vector2(r.end.x - 8, r.position.y + 8), Vector2(r.position.x + 8, r.end.y - 8), col, 3.0)
+		return
+	var slots: Array = WALL_SLOTS if _is_wall(drag.id) else DECOR_SLOTS
+	for s in slots.size():  # 所有摆件位淡淡圈出来
+		draw_arc(slots[s], 22, 0, TAU, 24, Color(1, 1, 1, 0.35), 1.5, true)
+	var best := _orn_slot_near(drag, mp)
+	if best >= 0:
+		draw_arc(slots[best], 26, 0, TAU, 28, Color(0.3, 0.85, 0.35), 3.0, true)
+
+
+## 刚从木工坊买来、还拿在手上的东西：点一下放下，右键退货。
+func _start_placing(d: Dictionary) -> void:
+	d["new"] = true
+	d["back"] = not arranging  # 放好以后回集市
+	arranging = true
+	drag = d
+	hover_shop = ""
+	Input.set_default_cursor_shape(Input.CURSOR_ARROW)
+	_refresh_ui()
+	queue_redraw()
+
+
+func _placing() -> bool:
+	return drag != null and drag.get("new", false)
+
+
+## 放好了（或者要收工了）：东西留在当前位置。
+func _finish_placing() -> void:
+	if not _placing():
+		return
+	var back: bool = drag.back
+	if drag.kind == "table":
+		_rebuild_seats()
+		_log("木工坊送来的长方桌摆好了，现在有 %d 个座位。" % tables.size())
+	else:
+		_log("%s摆好了。" % _orn_name(drag.id))
+	drag = null
+	if back:
+		arranging = false
+	_refresh_ui()
+	queue_redraw()
+
+
+## 右键：不要了，原价退回木工坊。
+func _cancel_placing() -> void:
+	if not _placing():
+		return
+	var d: Dictionary = drag
+	money += int(d.cost)
+	_book("店面", int(d.cost))
+	if d.kind == "table":
+		pieces.remove_at(int(d.i))
+		_rebuild_seats()
+		_log("长方桌退回了木工坊，钱也拿回来了。")
+	else:
+		ornaments.erase(d.id)
+		_log("%s退回了木工坊，钱也拿回来了。" % _orn_name(d.id))
+	drag = null
+	if d.back:
+		arranging = false
+	_refresh_ui()
+	queue_redraw()
+
+
+func _orn_name(id: String) -> String:
+	for it in Data.DECOR_ITEMS:
+		if it.id == id:
+			return it.name
+	return id
 
 
 # ---------------- 主线与结局 ----------------
@@ -1814,6 +1936,7 @@ func _story_effect(ev: Dictionary, yes: bool) -> String:
 func _end_rest_day() -> void:
 	if not is_rest_day:
 		return
+	_finish_placing()
 	arranging = false
 	drag = null
 	_save_game()  # 存下休假日里买的东西
@@ -1951,7 +2074,7 @@ func _restart() -> void:
 
 func _buy_food(k: int, amount: int) -> void:
 	var cost := _food_cost(k, amount)
-	if not is_rest_day or money < cost:
+	if not _at_shop("grain") or money < cost:
 		return
 	money -= cost
 	_book("常规采购", -cost)
@@ -2000,7 +2123,7 @@ func _refresh_market() -> void:
 
 
 func _hire_candidate(i: int) -> void:
-	if not is_rest_day or i >= market.size():
+	if not _at_shop("labor") or i >= market.size():
 		return
 	var cand: Dictionary = market[i]
 	if cand.get("hired", false) or staff.size() >= MAX_STAFF or money < int(cand.fee):
@@ -2052,19 +2175,22 @@ func _free_piece_cell() -> Vector2i:
 func _buy_table() -> void:
 	var cost := _table_cost()
 	var c := _free_piece_cell()
-	if not is_rest_day or c.x < 0 or money < cost:
+	if not _at_shop("carpenter") or c.x < 0 or money < cost or _placing():
 		return
 	money -= cost
 	_book("店面", -cost)
-	pieces.append(c)
-	_rebuild_seats()
-	_log("木工坊送来一张长方桌，现在有 %d 个座位。" % tables.size())
-	_refresh_ui()
-	queue_redraw()
+	pieces.append(c)  # 先占着一个摆得下的空位；玩家拿在手上挪到想要的地方
+	if autotest or autoplay_weeks > 0:
+		_rebuild_seats()
+		_log("木工坊送来一张长方桌，现在有 %d 个座位。" % tables.size())
+		_refresh_ui()
+		queue_redraw()
+		return
+	_start_placing({"kind": "table", "i": pieces.size() - 1, "cost": cost})
 
 
 func _expand() -> void:
-	if not is_rest_day or expand_level >= Data.EXPANSIONS.size() - 1:
+	if not _at_shop("carpenter") or expand_level >= Data.EXPANSIONS.size() - 1:
 		return
 	var e: Dictionary = Data.EXPANSIONS[expand_level + 1]
 	if money < int(e.cost):
@@ -2091,7 +2217,7 @@ func stove_speed() -> float:
 
 
 func _upgrade_tables() -> void:
-	if not is_rest_day or table_level >= Data.TABLE_GRADES.size() - 1:
+	if not _at_shop("carpenter") or table_level >= Data.TABLE_GRADES.size() - 1:
 		return
 	var g: Dictionary = Data.TABLE_GRADES[table_level + 1]
 	if money < int(g.cost):
@@ -2105,7 +2231,7 @@ func _upgrade_tables() -> void:
 
 
 func _upgrade_stove() -> void:
-	if not is_rest_day or stove_level >= Data.STOVE_GRADES.size() - 1:
+	if not _at_shop("carpenter") or stove_level >= Data.STOVE_GRADES.size() - 1:
 		return
 	var g: Dictionary = Data.STOVE_GRADES[stove_level + 1]
 	if money < int(g.cost):
@@ -2119,7 +2245,7 @@ func _upgrade_stove() -> void:
 
 
 func _upgrade_counter() -> void:
-	if not is_rest_day or counter_level >= Data.COUNTER_GRADES.size() - 1:
+	if not _at_shop("carpenter") or counter_level >= Data.COUNTER_GRADES.size() - 1:
 		return
 	var g: Dictionary = Data.COUNTER_GRADES[counter_level + 1]
 	if money < int(g.cost):
@@ -2150,7 +2276,7 @@ func _free_slot(after := -1, wall := false) -> int:
 
 
 func _buy_ornament(id: String) -> void:
-	if not is_rest_day or ornaments.has(id):
+	if not _at_shop("carpenter") or ornaments.has(id) or _placing():
 		return
 	for it in Data.DECOR_ITEMS:
 		if it.id == id:
@@ -2160,6 +2286,9 @@ func _buy_ornament(id: String) -> void:
 			money -= int(it.cost)
 			_book("店面", -int(it.cost))
 			ornaments[id] = slot
+			if not autotest and autoplay_weeks <= 0:
+				_start_placing({"kind": "orn", "id": id, "cost": int(it.cost)})
+				return
 			_log("木工坊送来了%s。" % it.name)
 	_refresh_ui()
 	queue_redraw()
@@ -2176,7 +2305,7 @@ func _move_ornament(id: String) -> void:
 
 
 func _buy_decor() -> void:
-	if not is_rest_day or decor_level >= DECOR_COSTS.size():
+	if not _at_shop("carpenter") or decor_level >= DECOR_COSTS.size():
 		return
 	var cost: int = DECOR_COSTS[decor_level]
 	if money < cost:
@@ -2192,7 +2321,7 @@ func _buy_decor() -> void:
 func _buy_item(k: int) -> void:
 	var it: Dictionary = Data.ITEMS[k]
 	var w = selected_staff
-	if not is_rest_day or w == null or not is_instance_valid(w) or money < int(it.price):
+	if not _at_shop("grocer") or w == null or not is_instance_valid(w) or money < int(it.price):
 		return
 	money -= int(it.price)
 	var st: Dictionary = w.info.stats
@@ -2520,8 +2649,13 @@ func _draw() -> void:
 	_draw_hall()
 	_draw_tables()
 	_draw_decor()
+	if arranging and drag != null:
+		_draw_drop_preview()
 	if arranging:
 		var hint := "布置中：按住拖动桌子、摆件、字画，松手放到最近的空位"
+		if _placing():
+			var what: String = "长方桌" if drag.kind == "table" else _orn_name(drag.id)
+			hint = "手上拿着刚买的%s：点一下放下（绿格能放，红格不行）　·　右键或 Esc 退货" % what
 		draw_string_outline(font, Vector2(40, 700), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, 4, Color(0, 0, 0, 0.6))
 		draw_string(font, Vector2(40, 700), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("ffe9b0"))
 	elif is_rest_day:
@@ -2679,6 +2813,7 @@ func _draw_counter() -> void:
 
 # ---------------- 休假日的集市 ----------------
 
+const SHOP_IDS := ["grain", "labor", "carpenter", "grocer"]  # 要花时辰才能进的铺子
 const SHOPS := {
 	"grain": {"name": "粮行", "flag": "粮", "rect": Rect2(30, 108, 200, 240), "wall": "e8d8b0", "roof": "4a5a6a"},
 	"labor": {"name": "人力市场", "flag": "工", "rect": Rect2(244, 108, 200, 240), "wall": "e0cfa8", "roof": "5a4a6a"},
@@ -2697,7 +2832,35 @@ func _shop_at(p: Vector2) -> String:
 	return ""
 
 
+## 今天进过这家铺子没有（只有进过的铺子才能在里面买东西、招人）。自动测试和自动试玩不受限。
+func _at_shop(id: String) -> bool:
+	return is_rest_day and (rest_visited.has(id) or autotest or autoplay_weeks > 0)
+
+
+func _visits_left() -> int:
+	return maxi(0, REST_VISITS - rest_visited.size())
+
+
+## 城镇页顶上的说明：今天进过哪些铺子、还能进几家。
+func _visit_text() -> String:
+	if autotest or autoplay_weeks > 0:
+		return "今天是休假日，城里各处都能去。"
+	var names := PackedStringArray()
+	for id in rest_visited:
+		names.append(SHOPS[id].name)
+	var went := "还没进过铺子" if names.is_empty() else "进过：" + "、".join(names)
+	return "休假日 · %s；还能再进 %d 家。\n在左边集市里点铺子走进去，进过的铺子才能买东西、招人。" % [went, _visits_left()]
+
+
 func _open_shop(id: String) -> void:
+	if SHOP_IDS.has(id) and not rest_visited.has(id):
+		if _visits_left() <= 0 and not autotest and autoplay_weeks <= 0:
+			_play_dialog([{"s": "掌柜", "t": "东家，天色不早，铺子都要上门板了。今天就到这儿，回店里准备明天开张吧。"}], Callable())
+			return
+		rest_visited.append(id)
+		_log("走进%s（今天还能再去 %d 家）。" % [SHOPS[id].name, _visits_left()])
+		_refresh_ui()
+		queue_redraw()
 	sfx.play("bell", -6.0)
 	match id:
 		"grain", "labor", "grocer":
@@ -2792,7 +2955,12 @@ func _draw_market() -> void:
 			draw_line(p + Vector2(-16, -4 - bob), p + Vector2(16, -4 - bob), Color("5a3a22"), 2.0)
 			_disc(p + Vector2(-16, 4 - bob), 5.0, Color("c8a060"))
 			_disc(p + Vector2(16, 4 - bob), 5.0, Color("c8a060"))
-	draw_string(title_font, Vector2(330, 700), "点铺子进去办事", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1, 0.75))
+	var tip := "点铺子进去办事　·　今天还能进 %d 家（进一家耗一个时辰，进过的可以随时回去）" % _visits_left()
+	if _visits_left() == 0:
+		tip = "铺子都快关门了，只剩进过的几家还能办事　·　去「回店开张」"
+	var tipw := title_font.get_string_size(tip, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
+	draw_string_outline(title_font, Vector2(450 - tipw / 2.0, 700), tip, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, 4, Color(0, 0, 0, 0.45))
+	draw_string(title_font, Vector2(450 - tipw / 2.0, 700), tip, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1, 0.9))
 
 
 func _draw_shop(id: String, s: Dictionary) -> void:
@@ -2852,9 +3020,20 @@ func _draw_shop(id: String, s: Dictionary) -> void:
 			_disc(sp + Vector2(28, -6), 7.0, Color("7a4a2a"))
 			draw_rect(Rect2(sp + Vector2(38, -16), Vector2(18, 14)), Color("a85a8a"))
 			draw_rect(Rect2(sp + Vector2(38, -16), Vector2(18, 4)), Color("e0b84a"))
+	var visited := rest_visited.has(id)
+	var shut := not visited and _visits_left() == 0
+	if shut:  # 没进过、也没时辰再进了：上了门板
+		draw_rect(Rect2(r.position + Vector2(6, 54), Vector2(r.size.x - 12, 180)), Color(0.1, 0.07, 0.05, 0.5))
+		for k in 5:
+			draw_rect(Rect2(door.position + Vector2(0, 4 + k * 24), Vector2(door.size.x, 20)), Color("6a4a2e"))
+	if visited:  # 进过的铺子门口盖个「已进」的戳
+		var st := r.position + Vector2(36, 150)
+		draw_circle(st, 20, Color(0.75, 0.15, 0.12, 0.85), false, 2.5, true)
+		draw_string(title_font, st + Vector2(-16, 7), "已进", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.75, 0.15, 0.12, 0.9))
 	if hl:
 		draw_rect(Rect2(r.position + Vector2(6, 54), Vector2(r.size.x - 12, 180)), Color(1, 0.9, 0.5, 0.12))
-		_market_label(r.position + Vector2(r.size.x / 2.0, 252), "点击进入" + nm, true)
+		var hint := "回到" + nm if visited else ("已经关门了" if shut else "点击进入" + nm + "（耗一个时辰）")
+		_market_label(r.position + Vector2(r.size.x / 2.0, 252), hint, true)
 
 
 func _market_label(center: Vector2, text: String, highlight: bool) -> void:
@@ -3679,7 +3858,9 @@ func _build_town_tab() -> Control:
 func _build_shop_tab() -> Control:
 	var list := VBoxContainer.new()
 	list.add_theme_constant_override("separation", 6)
-	list.add_child(_hint("店面的活儿都归木工坊，只有休假日能做。装修、桌椅、灶台、摆件都会直接显示在大堂里。"))
+	list.add_child(_hint("店面的活儿都归木工坊，只有休假日能做。买了桌子和摆件会直接拿在手上，点大堂里的空位放下。"))
+	lbl_shop_visit = _wrap(_label("", 14, Color("8c2f39")))
+	list.add_child(lbl_shop_visit)
 	btn_arrange = _button("", _toggle_arrange)
 	btn_arrange.custom_minimum_size = Vector2(0, 38)
 	list.add_child(btn_arrange)
@@ -3821,10 +4002,17 @@ func _refresh_ui() -> void:
 
 	# 城镇
 	if is_rest_day:
-		lbl_town_status.text = "今天是休假日，城里各处都能去。"
+		lbl_town_status.text = _visit_text()
 	else:
 		lbl_town_status.text = "今天营业，进不了城。粮行只能急购（价格翻倍），其他要等休假日。"
 	btn_open_shop.visible = is_rest_day
+	if not is_rest_day:
+		lbl_shop_visit.text = "要等休假日才能找木工坊。"
+	elif _at_shop("carpenter"):
+		lbl_shop_visit.text = ""
+	else:
+		lbl_shop_visit.text = "今天还没进木工坊：在集市里点「木工坊」走进去才能买。"
+	lbl_shop_visit.visible = lbl_shop_visit.text != ""
 	btn_auto_food.text = "休假日自动补货：开" if auto_food_on else "休假日自动补货：关"
 	for k in food_rows.size():
 		var fr: Dictionary = food_rows[k]
@@ -3834,7 +4022,7 @@ func _refresh_ui() -> void:
 		fr.lbl.tooltip_text = "每天放坏 %d%%" % int(float(kind.spoil) * 100) if float(kind.spoil) > 0 else "放得住，不会坏"
 		for i in fr.buy.size():
 			fr.buy[i].visible = is_rest_day
-			fr.buy[i].disabled = money < _food_cost(k, FOOD_PACKS[i])
+			fr.buy[i].disabled = not _at_shop("grain") or money < _food_cost(k, FOOD_PACKS[i])
 			fr.buy[i].tooltip_text = "%d 文" % _food_cost(k, FOOD_PACKS[i])
 		fr.rush.visible = not is_rest_day
 		fr.calc.visible = is_rest_day
@@ -3854,7 +4042,7 @@ func _refresh_ui() -> void:
 			row.button.disabled = true
 		else:
 			row.label.text = "%s　想当%s　工钱 %d 文/天　签约费 %d 文\n「%s」（本事雇了才知道）" % [cand.name, cand.role, cand.wage, cand.fee, cand.get("intro", "……")]
-			row.button.disabled = not is_rest_day or money < int(cand.fee) or staff.size() >= MAX_STAFF
+			row.button.disabled = not _at_shop("labor") or money < int(cand.fee) or staff.size() >= MAX_STAFF
 	lbl_tables.text = "长方桌 %d 张，座位 %d 个（大堂：%s）" % [pieces.size(), tables.size(), Data.EXPANSIONS[expand_level].name]
 	if expand_level >= Data.EXPANSIONS.size() - 1:
 		btn_expand.text = "大堂已经全部打通"
@@ -3862,20 +4050,20 @@ func _refresh_ui() -> void:
 	else:
 		var ne: Dictionary = Data.EXPANSIONS[expand_level + 1]
 		btn_expand.text = "扩建：%s（%d 文）" % [ne.name, ne.cost]
-		btn_expand.disabled = not is_rest_day or money < int(ne.cost)
+		btn_expand.disabled = not _at_shop("carpenter") or money < int(ne.cost)
 	if _free_piece_cell().x < 0:
 		btn_table.text = "大堂摆满了，先扩建"
 		btn_table.disabled = true
 	else:
 		btn_table.text = "添一张长方桌（%d 文）" % _table_cost()
-		btn_table.disabled = not is_rest_day or money < _table_cost()
+		btn_table.disabled = not _at_shop("carpenter") or money < _table_cost()
 	lbl_decor.text = "装修：%s（%d / %d）" % [DECOR_NAMES[decor_level], decor_level, DECOR_COSTS.size()]
 	if decor_level >= DECOR_COSTS.size():
 		btn_decor.text = "已经是最高档了"
 		btn_decor.disabled = true
 	else:
 		btn_decor.text = "装修成「%s」（%d 文）" % [DECOR_NAMES[decor_level + 1], DECOR_COSTS[decor_level]]
-		btn_decor.disabled = not is_rest_day or money < int(DECOR_COSTS[decor_level])
+		btn_decor.disabled = not _at_shop("carpenter") or money < int(DECOR_COSTS[decor_level])
 	lbl_decor.text += "\n每档：客人更满意、更有耐心，来客更多"
 	var tg: Dictionary = Data.TABLE_GRADES[table_level]
 	lbl_table_grade.text = "现在用的是%s（满意度 +%d%%）" % [tg.name, int(float(tg.sat) * 100.0)]
@@ -3885,7 +4073,7 @@ func _refresh_ui() -> void:
 	else:
 		var ng: Dictionary = Data.TABLE_GRADES[table_level + 1]
 		btn_table_grade.text = "换成%s（%d 文）" % [ng.name, ng.cost]
-		btn_table_grade.disabled = not is_rest_day or money < int(ng.cost)
+		btn_table_grade.disabled = not _at_shop("carpenter") or money < int(ng.cost)
 	var cg: Dictionary = Data.COUNTER_GRADES[counter_level]
 	lbl_counter.text = "现在用的是%s（结账速度 ×%.2f）" % [cg.name, float(cg.speed)]
 	if counter_level >= Data.COUNTER_GRADES.size() - 1:
@@ -3894,7 +4082,7 @@ func _refresh_ui() -> void:
 	else:
 		var nc: Dictionary = Data.COUNTER_GRADES[counter_level + 1]
 		btn_counter.text = "换成%s（%d 文）" % [nc.name, nc.cost]
-		btn_counter.disabled = not is_rest_day or money < int(nc.cost)
+		btn_counter.disabled = not _at_shop("carpenter") or money < int(nc.cost)
 	var sg: Dictionary = Data.STOVE_GRADES[stove_level]
 	lbl_stove.text = "现在用的是%s（做菜速度 ×%.2f）" % [sg.name, float(sg.speed)]
 	if stove_level >= Data.STOVE_GRADES.size() - 1:
@@ -3903,7 +4091,7 @@ func _refresh_ui() -> void:
 	else:
 		var ns: Dictionary = Data.STOVE_GRADES[stove_level + 1]
 		btn_stove.text = "砌%s（%d 文）" % [ns.name, ns.cost]
-		btn_stove.disabled = not is_rest_day or money < int(ns.cost)
+		btn_stove.disabled = not _at_shop("carpenter") or money < int(ns.cost)
 	var slot_names := ["左墙上", "右墙上", "左墙下", "右墙下", "门口左", "门口右"]
 	for row in ornament_rows:
 		var owned: bool = ornaments.has(row.id)
@@ -3917,11 +4105,11 @@ func _refresh_ui() -> void:
 		for it in Data.DECOR_ITEMS:
 			if it.id == row.id:
 				cost = int(it.cost)
-		row.buy.disabled = not is_rest_day or money < cost or _free_slot(-1, wall) < 0
+		row.buy.disabled = not _at_shop("carpenter") or money < cost or _free_slot(-1, wall) < 0
 	var target_ok: bool = selected_staff != null and is_instance_valid(selected_staff)
 	lbl_item_target.text = ("买给：%s（在「伙计」里选人）" % selected_staff.info.name) if target_ok else "先在「伙计」里选中一个伙计，再给他买道具。"
 	for k in item_buttons.size():
-		item_buttons[k].disabled = not is_rest_day or not target_ok or money < int(Data.ITEMS[k].price)
+		item_buttons[k].disabled = not _at_shop("grocer") or not target_ok or money < int(Data.ITEMS[k].price)
 
 	# 比赛
 	for i in contest_labels.size():
@@ -4022,7 +4210,7 @@ func _build_calc(root: Control) -> void:
 
 
 func _open_calc(k: int) -> void:
-	if not is_rest_day:
+	if not _at_shop("grain"):
 		return
 	calc_kind = k
 	calc_qty = 0
@@ -4476,10 +4664,42 @@ func _autotest_popup(title: String) -> void:
 		_on_popup_button()
 
 
+## 像玩家一样逛：进铺子次数有限；买了桌子、摆件拿在手上放。测完把自动测试的放行恢复。
+func _autotest_visits_and_placing() -> void:
+	autotest = false
+	rest_visited.clear()
+	for id in SHOP_IDS:
+		_open_shop(id)
+	var refused: bool = dialog.visible and rest_visited.size() == REST_VISITS
+	dialog.skip_all()
+	Engine.time_scale = speed
+	print("[autotest] visits=%s refused_extra=%s labor_ok=%s grocer_ok=%s" % [rest_visited, refused, _at_shop("labor"), _at_shop("grocer")])
+	if not rest_visited.has("carpenter"):
+		rest_visited[0] = "carpenter"
+	var n := pieces.size()
+	var m0 := money
+	_buy_table()
+	var blocked := not _drop(drag, cell_center(pieces[0]))  # 往已有桌子上放：不行
+	print("[autotest] placing=%s blocked_on_table=%s" % [_placing(), blocked])
+	await _shot("placing")
+	_cancel_placing()
+	print("[autotest] cancel refund ok=%s pieces_back=%s" % [money == m0, pieces.size() == n])
+	_buy_table()
+	_finish_placing()
+	var orn_id: String = Data.DECOR_ITEMS[0].id
+	var had := ornaments.has(orn_id)
+	_buy_ornament(orn_id)
+	var orn_placing := _placing()
+	_finish_placing()
+	print("[autotest] table placed=%s seats=%d orn_placing=%s orn_kept=%s arranging=%s" % [pieces.size() == n + 1, tables.size(), orn_placing or had, ornaments.has(orn_id), arranging])
+	autotest = true
+
+
 func _autotest_rest_day() -> void:
 	await get_tree().process_frame
 	if day == 7:
 		money += 18000  # 测试资金，把各种操作都走一遍
+		await _autotest_visits_and_placing()
 		for k in food.size():
 			_buy_food(k, 300)
 		for i in 3:
